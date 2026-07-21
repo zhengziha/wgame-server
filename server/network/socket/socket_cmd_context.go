@@ -4,6 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"wgame-server/comm/log"
 	"wgame-server/server/codec"
 	"wgame-server/server/context"
 	"wgame-server/server/msg"
@@ -69,13 +70,23 @@ func (c *SocketCmdContext) GetClientIpAddr() string {
 
 // Write 把消息对象编码成帧并投递到发送队列。
 // msgObj 必须实现 msg.OutMessage，否则直接丢弃并记录。
+//
+// 错误处理策略：
+//   - msgObj 不是 OutMessage：记 Error（业务代码错误，必须修）
+//   - WriteFrame 编码失败（通常是反射 tag 错误）：记 Error（业务代码错误，必须修）
+//   - 连接已关闭：静默返回（正常生命周期事件，不是错误）
 func (c *SocketCmdContext) Write(msgObj interface{}) {
 	m, ok := msgObj.(msg.OutMessage)
 	if !ok {
+		log.Error("[socket] Write rejected: msgObj %T does not implement msg.OutMessage; cmd sid=%d",
+			msgObj, c.sessionId)
 		return
 	}
 	data, err := msg.WriteFrame(m, -1, 0)
 	if err != nil {
+		// 编码失败几乎全是反射 tag 错误或 nil 指针，属于程序 bug
+		log.Error("[socket] Write encode failed: cmd=0x%04X sid=%d err=%v",
+			m.Cmd(), c.sessionId, err)
 		return
 	}
 	c.enqueueFrame(data)

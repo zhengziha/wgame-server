@@ -70,6 +70,9 @@ func (f *Firewall) Check(ctx context.MyCmdContext, frame *codec.Frame) bool {
 	f.lastTs = now
 
 	// 2) 滑动窗口限流
+	//    使用切片头部 reslice 替代"每次都新建底层数组"，
+	//    避免高频包场景下 O(N) 拷贝。仅当尾部累计空闲 >= windowSize 时
+	//    才整体 compact 一次，平摊代价 O(1)。
 	f.recentPacketTs = append(f.recentPacketTs, now)
 	cutoff := now.Add(-f.WindowSize)
 	idx := 0
@@ -79,7 +82,11 @@ func (f *Firewall) Check(ctx context.MyCmdContext, frame *codec.Frame) bool {
 		}
 	}
 	if idx > 0 {
-		f.recentPacketTs = append([]time.Time(nil), f.recentPacketTs[idx:]...)
+		f.recentPacketTs = f.recentPacketTs[idx:]
+	}
+	// 当头部已退化的累积量超过窗口容量的一半时，做一次 compact 回收内存
+	if cap(f.recentPacketTs)-len(f.recentPacketTs) > f.MaxPacketsInWindow/2 {
+		f.recentPacketTs = append([]time.Time(nil), f.recentPacketTs...)
 	}
 	if len(f.recentPacketTs) > f.MaxPacketsInWindow {
 		f.kickCount++

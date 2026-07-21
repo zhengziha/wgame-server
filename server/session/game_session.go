@@ -11,14 +11,17 @@ import (
 // 字段刻意保持精简：业务层可以自由扩展（如 Chara、Team、Match 字段）。
 type GameSession struct {
 	// 逻辑字段（atomic / mutex 保护）
-	id        int64 // 玩家 id；未登录为 0
+	// id：玩家 id；未登录为 0。读写都走 atomic，消除 data race。
+	id atomic.Int64
+
+	// sessionId 在构造后不变，无需同步。
 	sessionId int32 // 连接 id；与 CmdContext.SessionId 对应
 
 	// 连接元信息
 	ClientIP  string
 	ChannelID string // 等价 Java Netty channel long text id
 
-	// 账号信息（登录后填充）
+	// 账号信息（登录后填充；读写由 mu 保护）
 	AccountID   int64
 	AccountName string
 
@@ -50,14 +53,12 @@ func NewGameSession(sessionId int32, clientIP, channelID string) *GameSession {
 	return s
 }
 
-// ID 返回玩家 id
-func (s *GameSession) ID() int64 { return s.id }
+// ID 返回玩家 id（原子读，并发安全）
+func (s *GameSession) ID() int64 { return s.id.Load() }
 
-// SetID 设置玩家 id（登录成功后调用）
+// SetID 设置玩家 id（原子写，并发安全；登录成功后调用）
 func (s *GameSession) SetID(id int64) {
-	s.mu.Lock()
-	s.id = id
-	s.mu.Unlock()
+	s.id.Store(id)
 }
 
 // SessionID 返回连接 id
@@ -66,10 +67,14 @@ func (s *GameSession) SessionID() int32 { return s.sessionId }
 // ActorKey 返回用于 worker 分片的 key。
 // 与 Java 一致：未登录用 accountId，登录后用 chara.id（这里用 ID()）。
 func (s *GameSession) ActorKey() int {
-	if s.id != 0 {
-		return int(s.id)
+	id := s.ID()
+	if id != 0 {
+		return int(id)
 	}
-	return int(s.AccountID)
+	s.mu.RLock()
+	aid := s.AccountID
+	s.mu.RUnlock()
+	return int(aid)
 }
 
 // IsOnline 返回会话是否在线

@@ -1,6 +1,12 @@
 package msg
 
-import "wgame-server/server/codec"
+// UserQueryReq 查询用户请求，cmd=0x0200
+// 入站 body: WriteLong(id)
+type UserQueryReq struct {
+	ID int64
+}
+
+func (m *UserQueryReq) Cmd() uint16 { return CmdUserQueryReq }
 
 // UserQueryResp 查询用户返回，cmd=0x0201
 type UserQueryResp struct {
@@ -15,11 +21,3 @@ const CmdUserQueryReq uint16 = 0x0200
 const CmdUserQueryResp uint16 = 0x0201
 
 func (m *UserQueryResp) Cmd() uint16 { return CmdUserQueryResp }
-
-func (m *UserQueryResp) WriteBody(w *codec.GameWriter) {
-	w.WriteBoolean(m.Found)
-	w.WriteLong(m.ID)
-	w.WriteString(m.Account)
-	w.WriteString(m.Nickname)
-	w.WriteInt(int32(m.Level))
-}

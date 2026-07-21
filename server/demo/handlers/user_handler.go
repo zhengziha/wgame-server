@@ -12,22 +12,19 @@ import (
 	"wgame-server/server/network/handler"
 )
 
-// CmdUserQueryReq 与 demomsg 中定义保持一致
-const cmdUserQueryReq uint16 = demomsg.CmdUserQueryReq
-
 func init() {
-	handler.Register(cmdUserQueryReq, "UserQuery", UserQueryHandler)
+	handler.RegisterTyped(
+		demomsg.CmdUserQueryReq,
+		"UserQuery",
+		func() *demomsg.UserQueryReq { return &demomsg.UserQueryReq{} },
+		UserQueryHandler,
+	)
 }
 
-// UserQueryHandler 读取一个 int64 用户 id，返回 UserQueryResp。
-// 演示了从自定义协议层调用 DAO（SQLite + Redis）的完整路径。
-//
-// 入站 body: WriteLong(id)
-func UserQueryHandler(ctx myctx.MyCmdContext, frame *codec.Frame, reader *codec.GameReader) error {
-	id, err := reader.ReadLong()
-	if err != nil {
-		return err
-	}
+// UserQueryHandler 直接拿到已反序列化好的 *UserQueryReq，
+// 不再需要手写 reader.ReadLong() 等读取代码。
+func UserQueryHandler(ctx myctx.MyCmdContext, frame *codec.Frame, req *demomsg.UserQueryReq) error {
+	id := req.ID
 
 	// DAO 调用：自带 5 秒超时，避免单请求卡住主线程
 	cctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
