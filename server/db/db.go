@@ -68,6 +68,7 @@ type RedisConfig struct {
 // 全局实例
 var (
 	gormDB  *gorm.DB
+	authDB  *gorm.DB
 	cacheDB cache.Cache
 
 	rw        sync.RWMutex
@@ -224,6 +225,12 @@ func Close() error {
 			}
 			gormDB = nil
 		}
+		if authDB != nil {
+			if sqlDB, err := authDB.DB(); err == nil {
+				_ = sqlDB.Close()
+			}
+			authDB = nil
+		}
 		if cacheDB != nil {
 			_ = cacheDB.Close()
 			cacheDB = nil
@@ -245,3 +252,56 @@ var ErrNotInitialized = errors.New("db: not initialized, call db.Init first")
 
 // ErrUnsupportedDriver 表示 NewDialector 收到未识别的 driver
 var ErrUnsupportedDriver = errors.New("db: unsupported driver")
+
+// InitAuth 初始化 auth 数据源（独立于 game 数据源）。
+// 用于 accounts、black_list、charge、conn、daili 等表。
+func InitAuth(dbCfg *DBConfig) error {
+	if dbCfg == nil {
+		return nil
+	}
+	dl, err := NewDialector(dbCfg)
+	if err != nil {
+		return err
+	}
+	logLevel := logger.Info
+	if dbCfg.LogLevel > 0 && dbCfg.LogLevel <= 4 {
+		logLevel = logger.LogLevel(dbCfg.LogLevel)
+	}
+	gdb, err := gorm.Open(dl, &gorm.Config{
+		Logger:                 logger.Default.LogMode(logLevel),
+		SkipDefaultTransaction: true,
+		PrepareStmt:            true,
+	})
+	if err != nil {
+		return err
+	}
+	sqlDB, err := gdb.DB()
+	if err != nil {
+		return err
+	}
+	maxOpen, maxIdle, maxLifetime := defaultPoolSize(dbCfg.Driver)
+	if dbCfg.MaxOpenConns > 0 {
+		maxOpen = dbCfg.MaxOpenConns
+	}
+	if dbCfg.MaxIdleConns > 0 {
+		maxIdle = dbCfg.MaxIdleConns
+	}
+	if dbCfg.ConnMaxLifetime > 0 {
+		maxLifetime = dbCfg.ConnMaxLifetime
+	}
+	sqlDB.SetMaxOpenConns(maxOpen)
+	sqlDB.SetMaxIdleConns(maxIdle)
+	sqlDB.SetConnMaxLifetime(maxLifetime)
+
+	rw.Lock()
+	authDB = gdb
+	rw.Unlock()
+	return nil
+}
+
+// AuthGORM 返回 auth 数据源的 *gorm.DB；未初始化时返回 nil。
+func AuthGORM() *gorm.DB {
+	rw.RLock()
+	defer rw.RUnlock()
+	return authDB
+}
