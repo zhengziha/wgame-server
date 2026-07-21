@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"wgame-server/comm/async_op"
 	"wgame-server/comm/log"
 	"wgame-server/comm/main_thread"
 	"wgame-server/server/codec"
@@ -139,20 +140,35 @@ func (s *Server) readLoop(ctx *SocketCmdContext) {
 			return
 		}
 
-		// 派发到主线程串行执行
+		// 派发策略：
+		// - 已登录（userId != 0）走 async_op 按 userId 分片：跨用户并行，同用户串行
+		// - 未登录（登录/注册等流程）走 main_thread 串行：避免伪造 userId 攻击分片
 		cmd := frame.Cmd
 		cp := frame
-		main_thread.Process(func() {
-			ok, hErr := handler.Dispatch(ctx, cp)
-			if !ok {
-				// 未注册的 cmd 仅记日志，不踢线
-				log.Info("[socket] unknown cmd=%d sid=%d", cmd, ctx.sessionId)
-				return
-			}
-			if hErr != nil {
-				log.Error("[socket] handler err cmd=%d sid=%d: %v", cmd, ctx.sessionId, hErr)
-			}
-		})
+		uid := ctx.GetUserId()
+		if uid != 0 {
+			async_op.Process(int(uid), func() {
+				ok, hErr := handler.Dispatch(ctx, cp)
+				if !ok {
+					log.Info("[socket] unknown cmd=%d sid=%d", cmd, ctx.sessionId)
+					return
+				}
+				if hErr != nil {
+					log.Error("[socket] handler err cmd=%d sid=%d: %v", cmd, ctx.sessionId, hErr)
+				}
+			}, nil)
+		} else {
+			main_thread.Process(func() {
+				ok, hErr := handler.Dispatch(ctx, cp)
+				if !ok {
+					log.Info("[socket] unknown cmd=%d sid=%d", cmd, ctx.sessionId)
+					return
+				}
+				if hErr != nil {
+					log.Error("[socket] handler err cmd=%d sid=%d: %v", cmd, ctx.sessionId, hErr)
+				}
+			})
+		}
 	}
 }
 

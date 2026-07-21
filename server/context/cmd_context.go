@@ -7,10 +7,19 @@ package context
 // 当前实现位于 server/socket.SocketCmdContext（基于 raw TCP）。
 type MyCmdContext interface {
 	// BindUserId 在登录成功后绑定业务 user id
-	BindUserId(val int64)
+	// 类型为 int32，对应数据库 characters.id（与 wd-server-fl 对齐）
+	BindUserId(val int32)
 
 	// GetUserId 返回当前绑定的 user id；未登录返回 0
-	GetUserId() int64
+	GetUserId() int32
+
+	// BindGid 在登录成功后绑定全局唯一 id
+	// gid 来自 characters.gid（32 字符无横杠 UUID）
+	BindGid(gid string)
+
+	// GetGid 返回当前绑定的 gid；未登录返回空串
+	// 客户端协议应使用 gid 作为玩家标识
+	GetGid() string
 
 	// GetSessionId 返回连接的唯一标识（int32 自增）
 	GetSessionId() int32

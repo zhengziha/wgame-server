@@ -52,12 +52,20 @@ func NewSocketCmdContext(c *tcpConn, sessionId int32, fw *firewall.Firewall) *So
 
 // 实现 context.MyCmdContext
 
-func (c *SocketCmdContext) BindUserId(val int64) {
+func (c *SocketCmdContext) BindUserId(val int32) {
 	c.session.SetID(val)
 }
 
-func (c *SocketCmdContext) GetUserId() int64 {
+func (c *SocketCmdContext) GetUserId() int32 {
 	return c.session.ID()
+}
+
+func (c *SocketCmdContext) BindGid(gid string) {
+	c.session.BindGid(gid)
+}
+
+func (c *SocketCmdContext) GetGid() string {
+	return c.session.Gid()
 }
 
 func (c *SocketCmdContext) GetSessionId() int32 {

@@ -3,6 +3,7 @@ package session
 import (
 	"sync"
 	"sync/atomic"
+	"wgame-server/server/game"
 )
 
 // GameSession 表示一条逻辑会话。
@@ -11,8 +12,13 @@ import (
 // 字段刻意保持精简：业务层可以自由扩展（如 Chara、Team、Match 字段）。
 type GameSession struct {
 	// 逻辑字段（atomic / mutex 保护）
-	// id：玩家 id；未登录为 0。读写都走 atomic，消除 data race。
-	id atomic.Int64
+	// id：玩家 id（对应数据库 characters.id，int32）；未登录为 0。
+	// 读写都走 atomic，消除 data race。
+	id atomic.Int32
+
+	// gid：全局唯一 id（对应 characters.gid，32 字符无横杠 UUID）。
+	// 客户端协议只认 gid，不认 id。登录成功后填充，由 mu 保护。
+	gid string
 
 	// sessionId 在构造后不变，无需同步。
 	sessionId int32 // 连接 id；与 CmdContext.SessionId 对应
@@ -22,11 +28,13 @@ type GameSession struct {
 	ChannelID string // 等价 Java Netty channel long text id
 
 	// 账号信息（登录后填充；读写由 mu 保护）
-	AccountID   int64
+	// AccountID 对应 accounts.id，与 wd-server-fl 一致使用 int32。
+	AccountID   int32
 	AccountName string
 
-	// chara 业务占位字段，业务侧可自行替换为具体类型
-	Chara interface{}
+	// chara 玩家运行时数据（登录后加载）
+	// 参考 Java wd-server-fl core/domain/Chara.java
+	Chara *game.Chara
 
 	// 离线相关
 	isConnection atomic.Bool
@@ -54,11 +62,27 @@ func NewGameSession(sessionId int32, clientIP, channelID string) *GameSession {
 }
 
 // ID 返回玩家 id（原子读，并发安全）
-func (s *GameSession) ID() int64 { return s.id.Load() }
+func (s *GameSession) ID() int32 { return s.id.Load() }
 
 // SetID 设置玩家 id（原子写，并发安全；登录成功后调用）
-func (s *GameSession) SetID(id int64) {
+func (s *GameSession) SetID(id int32) {
 	s.id.Store(id)
+}
+
+// Gid 返回全局唯一 id（登录后填充，并发安全）。
+// 客户端协议使用 gid 作为玩家标识，不使用数据库主键 id。
+func (s *GameSession) Gid() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.gid
+}
+
+// BindGid 绑定全局唯一 id（登录成功后调用，并发安全）。
+// gid 来自 characters.gid，在创建角色时由 uuidutil.NewGid() 生成。
+func (s *GameSession) BindGid(gid string) {
+	s.mu.Lock()
+	s.gid = gid
+	s.mu.Unlock()
 }
 
 // SessionID 返回连接 id
@@ -114,4 +138,19 @@ func (s *GameSession) MarkOffline(nowMilli int64) {
 // LastInactiveMilli 返回最后离线时间
 func (s *GameSession) LastInactiveMilli() int64 {
 	return atomic.LoadInt64(&s.lastInactive)
+}
+
+// GetChara 返回玩家运行时数据
+// 实现 game.Session 接口
+func (s *GameSession) GetChara() *game.Chara {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.Chara
+}
+
+// SetChara 设置玩家运行时数据（登录后调用）
+func (s *GameSession) SetChara(chara *game.Chara) {
+	s.mu.Lock()
+	s.Chara = chara
+	s.mu.Unlock()
 }
