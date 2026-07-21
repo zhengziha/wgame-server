@@ -1,0 +1,22 @@
+server:
+  addr: ":8800"
+
+game_db:
+  driver: mysql
+  dsn: "zhengzh:zheng@1013@tcp(139.196.189.119:3116)/w-game-preview?charset=utf8mb4&parseTime=True&loc=Local"
+  log_level: 2
+  max_open_conns: 10
+  max_idle_conns: 5
+
+auth_db:
+  driver: mysql
+  dsn: "zhengzh:zheng@1013@tcp(139.196.189.119:3116)/w-auth-preview?charset=utf8mb4&parseTime=True&loc=Local"
+  log_level: 2
+  max_open_conns: 10
+  max_idle_conns: 5
+
+cache:
+  driver: memory
+
+log:
+  level: info

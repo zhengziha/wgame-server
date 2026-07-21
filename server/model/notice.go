@@ -9,7 +9,7 @@ type Notice struct {
 	ID int32 `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 
 	// Message 公告消息内容
-	Message string `gorm:"size:255;column:message" json:"message"`
+	Message string `gorm:"size:1024;column:message" json:"message"`
 
 	// Time 轮询时间（分钟）（列名 time 为 SQL 保留字）
 	Time int32 `gorm:"column:time" json:"time"`

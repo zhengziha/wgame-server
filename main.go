@@ -32,12 +32,15 @@ import (
 	"wgame-server/comm/log"
 	"wgame-server/config"
 	"wgame-server/server/cache"
+	"wgame-server/server/core"
 	"wgame-server/server/db"
-	"wgame-server/server/model"
 	"wgame-server/server/network/socket"
 
 	// 匿名导入以触发 init() 自注册
 	_ "wgame-server/server/demo/handlers"
+	_ "wgame-server/server/handler/auth"
+	_ "wgame-server/server/handler/map"
+	_ "wgame-server/server/handler/system"
 )
 
 func main() {
@@ -74,11 +77,11 @@ func main() {
 
 	// 4) 初始化游戏数据库
 	if err := db.Init(&db.DBConfig{
-		Driver:         cfg.GameDB.Driver,
-		DSN:            cfg.GameDB.DSN,
-		LogLevel:       cfg.GameDB.LogLevel,
-		MaxOpenConns:   cfg.GameDB.MaxOpenConns,
-		MaxIdleConns:   cfg.GameDB.MaxIdleConns,
+		Driver:       cfg.GameDB.Driver,
+		DSN:          cfg.GameDB.DSN,
+		LogLevel:     cfg.GameDB.LogLevel,
+		MaxOpenConns: cfg.GameDB.MaxOpenConns,
+		MaxIdleConns: cfg.GameDB.MaxIdleConns,
 	}, nil); err != nil {
 		log.Error("[main] game db init failed: %v", err)
 		os.Exit(1)
@@ -89,11 +92,11 @@ func main() {
 	// 5) 初始化认证数据库（如果配置了）
 	if cfg.AuthDB.Driver != "" && cfg.AuthDB.DSN != "" {
 		if err := db.InitAuth(&db.DBConfig{
-			Driver:         cfg.AuthDB.Driver,
-			DSN:            cfg.AuthDB.DSN,
-			LogLevel:       cfg.AuthDB.LogLevel,
-			MaxOpenConns:   cfg.AuthDB.MaxOpenConns,
-			MaxIdleConns:   cfg.AuthDB.MaxIdleConns,
+			Driver:       cfg.AuthDB.Driver,
+			DSN:          cfg.AuthDB.DSN,
+			LogLevel:     cfg.AuthDB.LogLevel,
+			MaxOpenConns: cfg.AuthDB.MaxOpenConns,
+			MaxIdleConns: cfg.AuthDB.MaxIdleConns,
 		}); err != nil {
 			log.Error("[main] auth db init failed: %v", err)
 			os.Exit(1)
@@ -115,13 +118,22 @@ func main() {
 	}
 
 	// 7) AutoMigrate 所有业务模型
-	if err := db.AutoMigrate(model.AllModels()...); err != nil {
-		log.Error("[main] automigrate failed: %v", err)
+	// if err := db.AutoMigrate(model.AllModels()...); err != nil {
+	// 	log.Error("[main] automigrate failed: %v", err)
+	// 	os.Exit(1)
+	// }
+	// log.Info("[main] automigrate done: %d models", len(model.AllModels()))
+
+	// 8) 初始化 GameCore（线路和地图）
+	core.Instance().SetLineNum(1) // 默认 1 条线路，可配置
+	if err := core.Instance().InitLineAndMap(db.GORM()); err != nil {
+		log.Error("[main] game core init failed: %v", err)
 		os.Exit(1)
 	}
-	log.Info("[main] automigrate done: %d models", len(model.AllModels()))
+	core.Instance().SetReady(true)
+	log.Info("[main] game core initialized")
 
-	// 8) 启动 socket server
+	// 9) 启动 socket server
 	srv := socket.NewServer(socket.Config{Addr: cfg.Server.Addr})
 	srv.OnConnect(func(_ *socket.SocketCmdContext) {})
 	srv.OnDisconnect(func(c *socket.SocketCmdContext) {
@@ -135,7 +147,7 @@ func main() {
 		}
 	}()
 
-	// 9) 阻塞等待信号
+	// 10) 阻塞等待信号
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
 	log.Info("[main] recv signal %v, shutting down...", <-sig)

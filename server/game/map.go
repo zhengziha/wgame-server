@@ -2,15 +2,6 @@ package game
 
 import "sync"
 
-// Session 定义会话接口，用于解耦 game 包与 session 包的循环依赖。
-// server/session.GameSession 实现此接口。
-type Session interface {
-	SessionID() int32
-	ID() int32
-	Gid() string
-	GetChara() *Chara
-}
-
 // GameMap 表示游戏地图。
 // 参考 Java wd-server-fl core/GameMap.java。
 //
@@ -28,8 +19,11 @@ type GameMap struct {
 
 	LineNum int32 // 所属线路号（1-based）
 
-	// 当前地图的玩家列表
-	sessionList *sync.Map // map[Session]struct{}
+	// 当前地图的玩家列表 key=gid
+	sessionList *sync.Map // map[string]struct{}
+
+	// AOI 九宫格管理器
+	AOI *AOI
 
 	mu sync.RWMutex
 }
@@ -46,17 +40,18 @@ func NewGameMap(index, id, x, y, lineNum, mapType int32, name, showName string) 
 		Name:        name,
 		ShowName:    showName,
 		sessionList: &sync.Map{},
+		AOI:         NewAOI(100, 100, 30), // 默认 100x100 格子，每格 30 像素
 	}
 }
 
 // Join 玩家进入地图
-func (m *GameMap) Join(sess Session) {
-	m.sessionList.Store(sess, struct{}{})
+func (m *GameMap) Join(gid string) {
+	m.sessionList.Store(gid, struct{}{})
 }
 
 // Leave 玩家离开地图
-func (m *GameMap) Leave(sess Session) {
-	m.sessionList.Delete(sess)
+func (m *GameMap) Leave(gid string) {
+	m.sessionList.Delete(gid)
 }
 
 // SessionCount 返回当前地图玩家数量
@@ -106,8 +101,8 @@ func abs(v int32) int32 {
 }
 
 // RangeSessionList 遍历当前地图所有玩家
-func (m *GameMap) RangeSessionList(fn func(Session) bool) {
+func (m *GameMap) RangeSessionList(fn func(gid string) bool) {
 	m.sessionList.Range(func(key, value interface{}) bool {
-		return fn(key.(Session))
+		return fn(key.(string))
 	})
 }

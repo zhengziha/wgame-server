@@ -40,6 +40,11 @@ type GameSession struct {
 	isConnection atomic.Bool
 	lastInactive int64 // unix milli
 
+	// 心跳检测相关
+	heartEcho  int64        // 最后心跳时间（unix milli）
+	echoTime   int32        // 客户端心跳时间
+	echoWindow *SpeedWindow // 滑动窗口，用于检测加速器
+
 	// 会话级串行锁（与 Java GameSession.lock 等价）。
 	// 由 handler 派发层在调用业务 handler 前后 CAS 持有/释放。
 	lock atomic.Bool
@@ -53,9 +58,10 @@ type GameSession struct {
 // NewGameSession 构造一条新会话
 func NewGameSession(sessionId int32, clientIP, channelID string) *GameSession {
 	s := &GameSession{
-		sessionId: sessionId,
-		ClientIP:  clientIP,
-		ChannelID: channelID,
+		sessionId:  sessionId,
+		ClientIP:   clientIP,
+		ChannelID:  channelID,
+		echoWindow: NewSpeedWindow(10), // 默认容量10
 	}
 	s.isConnection.Store(true)
 	return s
@@ -103,6 +109,11 @@ func (s *GameSession) ActorKey() int {
 
 // IsOnline 返回会话是否在线
 func (s *GameSession) IsOnline() bool { return s.isConnection.Load() }
+
+// SetOnline 设置会话在线状态
+func (s *GameSession) SetOnline(online bool) {
+	s.isConnection.Store(online)
+}
 
 // BindCmdContext 把 CmdContext 反向绑定到 session（用 interface 规避循环依赖）
 func (s *GameSession) BindCmdCtx(ctx interface{}) {
@@ -153,4 +164,37 @@ func (s *GameSession) SetChara(chara *game.Chara) {
 	s.mu.Lock()
 	s.Chara = chara
 	s.mu.Unlock()
+}
+
+// HeartEcho 返回最后心跳时间
+func (s *GameSession) HeartEcho() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.heartEcho
+}
+
+// SetHeartEcho 设置最后心跳时间
+func (s *GameSession) SetHeartEcho(timestamp int64) {
+	s.mu.Lock()
+	s.heartEcho = timestamp
+	s.mu.Unlock()
+}
+
+// EchoTime 返回客户端心跳时间
+func (s *GameSession) EchoTime() int32 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.echoTime
+}
+
+// SetEchoTime 设置客户端心跳时间
+func (s *GameSession) SetEchoTime(time int32) {
+	s.mu.Lock()
+	s.echoTime = time
+	s.mu.Unlock()
+}
+
+// EchoWindow 返回滑动窗口
+func (s *GameSession) EchoWindow() *SpeedWindow {
+	return s.echoWindow
 }
