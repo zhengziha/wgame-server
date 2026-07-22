@@ -50,7 +50,7 @@ func (m *MsgAuth) WriteBody(w *codec.GameWriter) {
 // MsgExistedCharList 对应 Java MSG_EXISTED_CHAR_LIST (cmd=61538)
 // 返回账号下的角色列表
 type MsgExistedCharList struct {
-	AccountOnline int32           // 账号是否在线
+	AccountOnline int32            // 账号是否在线
 	VoList        []*VoExistedChar // 角色列表
 }
 
@@ -142,10 +142,10 @@ func (m *MsgKickOff) WriteBody(w *codec.GameWriter) {
 // MsgShowReconnectPara 对应 Java MSG_SHOW_RECONNECT_PARA (cmd=21260)
 // 重连参数
 type MsgShowReconnectPara struct {
-	IP       string // 服务器IP
-	Port     int32  // 端口
-	AuthKey  int32  // 认证key
-	Seed     int32  // 种子
+	IP      string // 服务器IP
+	Port    int32  // 端口
+	AuthKey int32  // 认证key
+	Seed    int32  // 种子
 }
 
 func (m *MsgShowReconnectPara) Cmd() uint16 {
@@ -159,9 +159,94 @@ func (m *MsgShowReconnectPara) WriteBody(w *codec.GameWriter) {
 	w.WriteInt(m.Seed)
 }
 
+// MsgStartLogin 对应 Java MSG_L_START_LOGIN (cmd=45555)
+// 登录开始消息（登录预览后发送）
+type MsgStartLogin struct {
+	Type   string // 类型 "normal"
+	Cookie string // Cookie值
+}
+
+func (m *MsgStartLogin) Cmd() uint16 {
+	return 45555
+}
+
+func (m *MsgStartLogin) WriteBody(w *codec.GameWriter) {
+	w.WriteString(m.Type)
+	w.WriteString(m.Cookie)
+}
+
+// MsgLoginPreviewPlayer 对应 Java MSG_L_LOGIN_PREVIEW_PLAYER (cmd=21265)
+// 登录预览玩家列表
+type MsgLoginPreviewPlayer struct {
+	Account string // 账号
+	Data    string // 数据
+}
+
+func (m *MsgLoginPreviewPlayer) Cmd() uint16 {
+	return 21265
+}
+
+func (m *MsgLoginPreviewPlayer) WriteBody(w *codec.GameWriter) {
+	w.WriteString(m.Account)
+	w.WriteString(m.Data)
+}
+
+// MsgServerList 对应 Java MSG_L_SERVER_LIST (cmd=17237)
+// 服务器列表
+type MsgServerList struct {
+	// 预留字段，后续扩展
+}
+
+func (m *MsgServerList) Cmd() uint16 {
+	return 17237
+}
+
+func (m *MsgServerList) WriteBody(w *codec.GameWriter) {
+	// 暂时空实现，后续扩展
+}
+
+// MsgWaitInLine 对应 Java MSG_L_WAIT_IN_LINE (cmd=45143)
+// 线路信息/排队信息
+type MsgWaitInLine struct {
+	LineName        string // 分配的线路名称
+	ExpectTime      int32  // 等待时间
+	ReconnectTime   int32  // 重新获取数据的时间
+	WaitCode        int32  // 排名
+	Count           int32  // 线路数量
+	KeepAlive       int32  // 保持连接 0=每次请求后断开
+	NeedWait        int32  // 1=显示线路和排名, -1=正在处理中, -2=插队玩家
+	InsiderLv       int32  // 会员等级，-1=数据获取中
+	GoldCoin        int32  // 账号元宝数量
+	Status          int32  // 服务器状态 0=正常, 1=爆满, 2=满
+	StartServerTime int32  // 开服时间
+}
+
+func (m *MsgWaitInLine) Cmd() uint16 {
+	return 45143
+}
+
+func (m *MsgWaitInLine) WriteBody(w *codec.GameWriter) {
+	w.WriteString(m.LineName)
+	w.WriteInt(m.ExpectTime)
+	w.WriteInt(m.ReconnectTime)
+	w.WriteInt(m.WaitCode)
+	w.WriteInt(m.Count)
+	w.WriteUByte(int(m.KeepAlive))
+	w.WriteUByte(int(m.NeedWait))
+	w.WriteUByte(int(m.InsiderLv))
+	w.WriteInt(m.GoldCoin)
+	w.WriteUByte(int(m.Status))
+	w.WriteInt(m.StartServerTime)
+	w.WriteShort(1000) // left_give_lottery_times 固定值
+}
+
 // 确保实现 msg.OutMessage 接口
 var _ msg.OutMessage = (*MsgAgentResult)(nil)
 var _ msg.OutMessage = (*MsgAuth)(nil)
 var _ msg.OutMessage = (*MsgExistedCharList)(nil)
 var _ msg.OutMessage = (*MsgKickOff)(nil)
 var _ msg.OutMessage = (*MsgShowReconnectPara)(nil)
+var _ msg.OutMessage = (*MsgStartLogin)(nil)
+var _ msg.OutMessage = (*MsgLoginPreviewPlayer)(nil)
+var _ msg.OutMessage = (*MsgServerList)(nil)
+var _ msg.OutMessage = (*MsgWaitInLine)(nil)

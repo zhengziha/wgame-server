@@ -1,6 +1,9 @@
 package game
 
-import "sync"
+import (
+	"strconv"
+	"sync"
+)
 
 // AOICell 表示 AOI 单元格（九宫格中的一格）
 type AOICell struct {
@@ -66,7 +69,7 @@ func NewAOI(mapWidth, mapHeight, cellSize int32) *AOI {
 
 // getCellKey 获取单元格的键名
 func (a *AOI) getCellKey(cellX, cellY int32) string {
-	return string(rune(cellX+'0')) + "," + string(rune(cellY+'0'))
+	return strconv.Itoa(int(cellX)) + "," + strconv.Itoa(int(cellY))
 }
 
 // getCell 获取或创建单元格

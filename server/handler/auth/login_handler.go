@@ -7,9 +7,9 @@ import (
 	"wgame-server/server/core"
 	"wgame-server/server/db"
 	"wgame-server/server/game"
+	map_handler "wgame-server/server/handler/map"
 	"wgame-server/server/model"
 	"wgame-server/server/msg/auth"
-	map_msg "wgame-server/server/msg/map"
 	"wgame-server/server/network/handler"
 )
 
@@ -62,7 +62,15 @@ func CmdAccountHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *cod
 
 	if reqType == "cmd_l_login_preview_player" {
 		log.Info("[auth] 登录预览 type=%s", reqType)
-		ctx.Write(&auth.MsgKickOff{Msg: "登录预览暂未实现"})
+		// 发送登录预览玩家列表和登录开始消息
+		ctx.Write(&auth.MsgLoginPreviewPlayer{
+			Account: account,
+			Data:    "",
+		})
+		ctx.Write(&auth.MsgStartLogin{
+			Type:   "normal",
+			Cookie: "47Q60635Q22", // 固定值，与 Java 一致
+		})
 		return nil
 	}
 
@@ -98,6 +106,13 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 
 	log.Info("[auth] 角色登录 user=%s auth_key=%d seed=%d", user, authKey, seed)
 
+	// 检查服务器是否就绪
+	if !core.Instance().IsReady() {
+		log.Error("[auth] 服务器未就绪")
+		ctx.Write(&auth.MsgKickOff{Msg: "服务器正忙，请稍后再试！"})
+		return nil
+	}
+
 	var accounts model.Accounts
 	result := db.AuthGORM().Where("name = ?", user).First(&accounts)
 	if result.Error != nil {
@@ -111,6 +126,7 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 	var characters []model.Characters
 	db.GORM().Where("account_id = ?", accounts.ID).Find(&characters)
 
+	accountOnline := int32(0)
 	voList := make([]*auth.VoExistedChar, 0, len(characters))
 	for _, chara := range characters {
 		vo := &auth.VoExistedChar{
@@ -142,10 +158,15 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 			Title:           "",
 		}
 		voList = append(voList, vo)
+
+		// 检查是否有在线角色
+		if chara.Online == 1 {
+			accountOnline = 1
+		}
 	}
 
 	ctx.Write(&auth.MsgExistedCharList{
-		AccountOnline: 0,
+		AccountOnline: accountOnline,
 		VoList:        voList,
 	})
 
@@ -206,35 +227,21 @@ func CmdLoadExistedCharHandler(ctx context.MyCmdContext, frame *codec.Frame, rea
 	chara.Y = charaModel.Y
 	chara.Line = 1
 	chara.GoldCoin = charaModel.GoldCoin
+	chara.Nice = 0 // 默认好心值
+	chara.Dir = 0  // 默认方向
+	chara.Waiguan = 0
 
 	game.CharaManagerInstance().AddChara(chara)
 
 	gameMap := core.Instance().GetGameMap(chara.Line, chara.MapId)
 	if gameMap != nil {
-		game.PlayerEnterMap(chara, gameMap)
+		map_handler.EnterMap(ctx, chara, gameMap, chara.X, chara.Y)
 	}
 
+	// 更新数据库在线状态
+	db.GORM().Model(&model.Characters{}).Where("id = ?", charaModel.ID).Update("online", 1)
+
 	log.Info("[auth] 玩家登录成功 id=%d gid=%s name=%s", chara.ID, chara.Gid, chara.Name)
-
-	ctx.Write(&map_msg.MsgMapInfo{
-		MapID:   chara.MapId,
-		MapName: chara.MapName,
-	})
-
-	ctx.Write(&map_msg.MsgAppear{
-		CharID:      chara.ID,
-		Name:        chara.Name,
-		Gid:         chara.Gid,
-		Level:       chara.Level,
-		Polar:       chara.Polar,
-		Sex:         chara.Sex,
-		X:           chara.X,
-		Y:           chara.Y,
-		Dir:         chara.Dir,
-		Waiguan:     chara.Waiguan,
-		Nice:        chara.Nice,
-		FashionIcon: 0,
-	})
 
 	return nil
 }
@@ -243,4 +250,72 @@ func init() {
 	handler.Register(9040, "CmdAccount", CmdAccountHandler)
 	handler.Register(12290, "CmdLogin", CmdLoginHandler)
 	handler.Register(4192, "CmdLoadExistedChar", CmdLoadExistedCharHandler)
+	handler.Register(13140, "CmdGetServerList", CmdGetServerListHandler)
+	handler.Register(45144, "CmdRequestLineInfo", CmdRequestLineInfoHandler)
+}
+
+// CmdGetServerListHandler 处理 CMD_L_GET_SERVER_LIST (cmd=13140)
+// 客户端请求服务器列表
+func CmdGetServerListHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec.GameReader) error {
+	account, _ := reader.ReadString()
+	_, _ = reader.ReadInt()    // auth_key
+	_, _ = reader.ReadString() // dist
+
+	log.Info("[auth] 客户端请求服务器列表 account=%s", account)
+
+	var accounts model.Accounts
+	result := db.AuthGORM().Where("name = ?", account).First(&accounts)
+	if result.Error != nil {
+		log.Error("[auth] 账号不存在 account=%s", account)
+		ctx.Write(&auth.MsgAuth{Msg: "账号认证已过期,无法登录。"})
+		ctx.Disconnect()
+		return nil
+	}
+
+	// 发送服务器列表消息
+	ctx.Write(&auth.MsgServerList{})
+
+	return nil
+}
+
+// CmdRequestLineInfoHandler 处理 CMD_L_REQUEST_LINE_INFO (cmd=45144)
+// 客户端请求线路信息
+func CmdRequestLineInfoHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec.GameReader) error {
+	account, _ := reader.ReadString()
+
+	log.Info("[auth] 客户端请求线路信息 account=%s", account)
+
+	var accounts model.Accounts
+	result := db.AuthGORM().Where("name = ?", account).First(&accounts)
+	if result.Error != nil {
+		log.Error("[auth] 登录信息已失效 account=%s", account)
+		ctx.Write(&auth.MsgAuth{Msg: "登录信息已失效，请重新登录。"})
+		ctx.Disconnect()
+		return nil
+	}
+
+	// 获取角色的元宝数量（取第一个角色的元宝）
+	var characters []model.Characters
+	db.GORM().Where("account_id = ?", accounts.ID).First(&characters)
+	goldCoin := int32(0)
+	if len(characters) > 0 {
+		goldCoin = characters[0].GoldCoin
+	}
+
+	// 发送线路信息
+	ctx.Write(&auth.MsgWaitInLine{
+		LineName:        "line1", // 默认线路名
+		ExpectTime:      0,       // 无需等待
+		ReconnectTime:   0,       // 无需重连
+		WaitCode:        0,       // 排名
+		Count:           1,       // 线路数量
+		KeepAlive:       0,       // 保持连接
+		NeedWait:        1,       // 显示线路和排名
+		InsiderLv:       0,       // 会员等级
+		GoldCoin:        goldCoin,
+		Status:          0, // 正常
+		StartServerTime: 0, // 开服时间（暂不设置）
+	})
+
+	return nil
 }

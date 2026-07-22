@@ -19,6 +19,9 @@ type GameLine struct {
 	// 静态地图列表（从 map_info 加载，只读）
 	gameMapList []*GameMap
 
+	// 地图编号到 GameMap 的映射（只读）
+	gameMapIdMap map[int32]*GameMap
+
 	// 地图名称到 GameMap 的映射（只读）
 	gameRoomNameMap map[string]*GameMap
 
@@ -36,6 +39,7 @@ func NewGameLine(lineNum int32) *GameLine {
 	return &GameLine{
 		LineNum:         lineNum,
 		gameMapList:     make([]*GameMap, 0),
+		gameMapIdMap:    make(map[int32]*GameMap),
 		gameRoomNameMap: make(map[string]*GameMap),
 		gameZoneList:    make([]*GameZone, 0),
 		gameZoneUidMap:  make(map[string]*GameZone),
@@ -48,6 +52,7 @@ func (l *GameLine) Init(mapInfos []*model.MapInfo) {
 	defer l.mu.Unlock()
 
 	l.gameMapList = make([]*GameMap, 0, len(mapInfos))
+	l.gameMapIdMap = make(map[int32]*GameMap, len(mapInfos))
 	l.gameRoomNameMap = make(map[string]*GameMap, len(mapInfos))
 
 	for _, mi := range mapInfos {
@@ -62,6 +67,7 @@ func (l *GameLine) Init(mapInfos []*model.MapInfo) {
 			mi.Name, // showName 暂时用 name 代替
 		)
 		l.gameMapList = append(l.gameMapList, gameMap)
+		l.gameMapIdMap[mi.ID] = gameMap
 		l.gameRoomNameMap[mi.Name] = gameMap
 	}
 }
@@ -70,13 +76,7 @@ func (l *GameLine) Init(mapInfos []*model.MapInfo) {
 func (l *GameLine) GetGameMapById(mapId int32) *GameMap {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
-
-	for _, gm := range l.gameMapList {
-		if gm.ID == mapId {
-			return gm
-		}
-	}
-	return nil
+	return l.gameMapIdMap[mapId]
 }
 
 // GetGameMapByName 按地图名称查找地图
@@ -92,14 +92,8 @@ func (l *GameLine) CreateGameZone(mapID int32, uid string) *GameZone {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	// 先查找基础地图配置
-	var baseMap *GameMap
-	for _, gm := range l.gameMapList {
-		if gm.ID == mapID {
-			baseMap = gm
-			break
-		}
-	}
+	// 先查找基础地图配置（O(1) map 查找）
+	baseMap := l.gameMapIdMap[mapID]
 	if baseMap == nil {
 		return nil
 	}

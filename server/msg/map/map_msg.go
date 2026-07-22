@@ -74,3 +74,60 @@ func (m *MsgMapInfo) WriteBody(w *codec.GameWriter) {
 var _ msg.OutMessage = (*MsgAppear)(nil)
 var _ msg.OutMessage = (*MsgDisappear)(nil)
 var _ msg.OutMessage = (*MsgMapInfo)(nil)
+
+// MsgClearAllChar 对应 Java MSG_CLEAR_ALL_CHAR (cmd=45157)
+// 清除所有角色（进入地图前发送）
+type MsgClearAllChar struct {
+	ID    int32 // 角色ID
+	MapID int32 // 地图ID
+}
+
+func (m *MsgClearAllChar) Cmd() uint16 {
+	return 45157
+}
+
+func (m *MsgClearAllChar) WriteBody(w *codec.GameWriter) {
+	w.WriteInt(m.ID)
+	w.WriteInt(m.MapID)
+}
+
+// MsgEnterRoom79 对应 Java MSG_ENTER_ROOM_79 (cmd=65505)
+// 进入房间（包含地图信息和坐标）
+type MsgEnterRoom79 struct {
+	MapName          string // 地图名称
+	MapShowName      string // 地图显示名称
+	MapID            int32  // 地图ID
+	X                int32  // X坐标
+	Y                int32  // Y坐标
+	Dir              int32  // 方向
+	MapIndex         int32  // 地图索引
+	CompactMapIndex  int32  // 压缩地图索引
+	FloorIndex       int32  // 楼层索引
+	WallIndex        int32  // 墙壁索引
+	SafeZone         int32  // 安全区
+	IsTaskWalk       int32  // 是否任务行走
+	EnterEffectIndex int32  // 进入特效索引
+}
+
+func (m *MsgEnterRoom79) Cmd() uint16 {
+	return 65505
+}
+
+func (m *MsgEnterRoom79) WriteBody(w *codec.GameWriter) {
+	w.WriteString(m.MapName)
+	w.WriteString(m.MapShowName)
+	w.WriteInt(m.MapID)
+	w.WriteShort(int16(m.X))
+	w.WriteShort(int16(m.Y))
+	w.WriteUByte(int(m.Dir))
+	w.WriteInt(m.MapIndex)
+	w.WriteShort(int16(m.CompactMapIndex))
+	w.WriteUByte(int(m.FloorIndex))
+	w.WriteUByte(int(m.WallIndex))
+	w.WriteUByte(int(m.SafeZone))
+	w.WriteUByte(int(m.IsTaskWalk))
+	w.WriteUByte(int(m.EnterEffectIndex))
+}
+
+var _ msg.OutMessage = (*MsgClearAllChar)(nil)
+var _ msg.OutMessage = (*MsgEnterRoom79)(nil)

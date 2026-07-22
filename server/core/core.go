@@ -19,7 +19,8 @@ import (
 //   - 提供全局访问入口
 type GameCore struct {
 	gameLineList []*game.GameLine
-	lineNum      int32 // 线路数量
+	gameLineMap  map[int32]*game.GameLine // 线路号到线路的映射
+	lineNum      int32                    // 线路数量
 
 	mu      sync.RWMutex
 	isReady bool
@@ -35,6 +36,7 @@ func Instance() *GameCore {
 	initOnce.Do(func() {
 		instance = &GameCore{
 			gameLineList: make([]*game.GameLine, 0),
+			gameLineMap:  make(map[int32]*game.GameLine),
 			lineNum:      1, // 默认 1 条线路
 		}
 	})
@@ -55,10 +57,12 @@ func (c *GameCore) InitLineAndMap(db *gorm.DB) error {
 	}
 
 	c.gameLineList = make([]*game.GameLine, 0, c.lineNum)
+	c.gameLineMap = make(map[int32]*game.GameLine, c.lineNum)
 	for i := int32(0); i < c.lineNum; i++ {
 		line := game.NewGameLine(i + 1)
 		line.Init(mapInfos)
 		c.gameLineList = append(c.gameLineList, line)
+		c.gameLineMap[i+1] = line
 	}
 
 	log.Info("[core] 线路和地图初始化完成：%d 条线路，%d 张地图", c.lineNum, len(mapInfos))
@@ -80,13 +84,7 @@ func (c *GameCore) SetLineNum(num int32) {
 func (c *GameCore) GetGameLine(lineNum int32) *game.GameLine {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-
-	for _, line := range c.gameLineList {
-		if line.LineNum == lineNum {
-			return line
-		}
-	}
-	return nil
+	return c.gameLineMap[lineNum]
 }
 
 // GetGameMap 按线路号和地图编号获取地图

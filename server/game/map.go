@@ -54,6 +54,12 @@ func (m *GameMap) Leave(gid string) {
 	m.sessionList.Delete(gid)
 }
 
+// Has 检查玩家是否已在地图中
+func (m *GameMap) Has(gid string) bool {
+	_, exists := m.sessionList.Load(gid)
+	return exists
+}
+
 // SessionCount 返回当前地图玩家数量
 func (m *GameMap) SessionCount() int {
 	count := 0

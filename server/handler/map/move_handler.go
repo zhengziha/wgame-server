@@ -7,6 +7,7 @@ import (
 	"wgame-server/server/core"
 	"wgame-server/server/game"
 	map_msg "wgame-server/server/msg/map"
+	"wgame-server/server/network/broadcaster"
 	"wgame-server/server/network/handler"
 )
 
@@ -58,12 +59,22 @@ func CmdMultiMoveToHandler(ctx context.MyCmdContext, frame *codec.Frame, reader 
 
 	log.Info("[move] appear=%d disappear=%d", len(appearList), len(disappearList))
 
+	// 发送移动消息给自己
 	ctx.Write(&map_msg.MsgMoved{
 		ID:  int32(chara.ID),
 		X:   x,
 		Y:   y,
 		Dir: int32(dir),
 	})
+
+	// 发送移动消息给视野内的其他玩家（排除新进入视野的玩家）
+	sendMoveMessages(chara, gameMap, gid, appearList)
+
+	// 通知新进入视野的玩家
+	sendAppearMessages(chara, appearList)
+
+	// 通知离开视野的玩家
+	sendDisappearMessages(chara.ID, disappearList)
 
 	return nil
 }
@@ -101,8 +112,9 @@ func CmdOtherMoveToHandler(ctx context.MyCmdContext, frame *codec.Frame, reader 
 
 	chara.Dir = int32(dir)
 
-	game.PlayerMove(chara, gameMap, int32(x), int32(y))
+	appearList, disappearList := game.PlayerMove(chara, gameMap, int32(x), int32(y))
 
+	// 发送移动消息给自己
 	ctx.Write(&map_msg.MsgMoved{
 		ID:  int32(chara.ID),
 		X:   chara.X,
@@ -110,10 +122,81 @@ func CmdOtherMoveToHandler(ctx context.MyCmdContext, frame *codec.Frame, reader 
 		Dir: chara.Dir,
 	})
 
+	// 发送移动消息给视野内的其他玩家（排除新进入视野的玩家）
+	sendMoveMessages(chara, gameMap, gid, appearList)
+
+	// 通知新进入视野的玩家
+	sendAppearMessages(chara, appearList)
+
+	// 通知离开视野的玩家
+	sendDisappearMessages(chara.ID, disappearList)
+
 	return nil
 }
 
 func init() {
 	handler.Register(61634, "CmdMultiMoveTo", CmdMultiMoveToHandler)
 	handler.Register(16558, "CmdOtherMoveTo", CmdOtherMoveToHandler)
+}
+
+// sendMoveMessages 发送移动消息给视野内的其他玩家（排除自己和新进入视野的玩家）
+func sendMoveMessages(chara *game.Chara, gameMap *game.GameMap, gid string, appearList []string) {
+	if gameMap.AOI == nil {
+		return
+	}
+
+	// 将 appearList 转为 map 方便快速查找
+	appearSet := make(map[string]bool)
+	for _, g := range appearList {
+		appearSet[g] = true
+	}
+
+	nearbyGids := gameMap.AOI.GetNearby(chara.X, chara.Y)
+	for _, otherGid := range nearbyGids {
+		if otherGid != gid && !appearSet[otherGid] { // 不发给自己，也不发给新进入视野的玩家
+			broadcaster.SendToGid(&map_msg.MsgMoved{
+				ID:  int32(chara.ID),
+				X:   chara.X,
+				Y:   chara.Y,
+				Dir: chara.Dir,
+			}, otherGid)
+		}
+	}
+}
+
+// sendAppearMessages 通知新进入视野的玩家
+func sendAppearMessages(chara *game.Chara, appearList []string) {
+	for _, otherGid := range appearList {
+		otherChara := game.CharaManagerInstance().GetCharaByGid(otherGid)
+		if otherChara != nil {
+			log.Info("[move] notify %s about appear of %s", otherChara.Name, chara.Name)
+			broadcaster.SendToGid(&map_msg.MsgAppear{
+				CharID:      chara.ID,
+				Name:        chara.Name,
+				Gid:         chara.Gid,
+				Level:       chara.Level,
+				Polar:       chara.Polar,
+				Sex:         chara.Sex,
+				X:           chara.X,
+				Y:           chara.Y,
+				Dir:         chara.Dir,
+				Waiguan:     chara.Waiguan,
+				Nice:        chara.Nice,
+				FashionIcon: 0,
+			}, otherGid)
+		}
+	}
+}
+
+// sendDisappearMessages 通知离开视野的玩家
+func sendDisappearMessages(charID int32, disappearList []string) {
+	for _, otherGid := range disappearList {
+		otherChara := game.CharaManagerInstance().GetCharaByGid(otherGid)
+		if otherChara != nil {
+			log.Info("[move] notify %s about disappear", otherChara.Name)
+			broadcaster.SendToGid(&map_msg.MsgDisappear{
+				CharID: charID,
+			}, otherGid)
+		}
+	}
 }

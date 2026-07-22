@@ -47,3 +47,19 @@ func (m *MsgTeamMoved) WriteBody(w *codec.GameWriter) {
 
 var _ msg.OutMessage = (*MsgMoved)(nil)
 var _ msg.OutMessage = (*MsgTeamMoved)(nil)
+
+// MsgTeleportFailed 对应 Java MSG_TELEPORT_FAILED (cmd=61476)
+// 传送失败消息
+type MsgTeleportFailed struct {
+	Msg string // 失败原因
+}
+
+func (m *MsgTeleportFailed) Cmd() uint16 {
+	return 61476
+}
+
+func (m *MsgTeleportFailed) WriteBody(w *codec.GameWriter) {
+	w.WriteString(m.Msg)
+}
+
+var _ msg.OutMessage = (*MsgTeleportFailed)(nil)
