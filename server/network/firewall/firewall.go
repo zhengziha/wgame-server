@@ -33,6 +33,14 @@ type Firewall struct {
 	kickCount      int
 }
 
+var loginCmdWhitelist = map[uint16]bool{
+	9040:  true, // CMD_L_ACCOUNT
+	12290: true, // CMD_LOGIN
+	13140: true, // CMD_L_GET_SERVER_LIST
+	45144: true, // CMD_L_REQUEST_LINE_INFO
+	4192:  true, // CMD_LOAD_EXISTED_CHAR
+}
+
 // NewFirewall 构造一个默认参数的防火墙
 func NewFirewall() *Firewall {
 	return &Firewall{
@@ -55,18 +63,18 @@ func (f *Firewall) Check(ctx context.MyCmdContext, frame *codec.Frame) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// 1) 最小间隔检测
-	if !f.lastTs.IsZero() {
-		if now.Sub(f.lastTs) < f.MinInterval {
-			f.kickCount++
-			if now.Sub(f.warnedAt) > 5*time.Second {
-				log.Error("[firewall] packet too fast, sid=%d ip=%s cmd=%d kick=%d",
-					ctx.GetSessionId(), ctx.GetClientIpAddr(), frame.Cmd, f.kickCount)
-				f.warnedAt = now
-			}
-			return false
-		}
-	}
+	// 1) 最小间隔检测（登录阶段的命令跳过此检查）
+	// if !f.lastTs.IsZero() && !loginCmdWhitelist[frame.Cmd] {
+	// 	if now.Sub(f.lastTs) < f.MinInterval {
+	// 		f.kickCount++
+	// 		if now.Sub(f.warnedAt) > 5*time.Second {
+	// 			log.Error("[firewall] packet too fast, sid=%d ip=%s cmd=%d kick=%d",
+	// 				ctx.GetSessionId(), ctx.GetClientIpAddr(), frame.Cmd, f.kickCount)
+	// 			f.warnedAt = now
+	// 		}
+	// 		return false
+	// 	}
+	// }
 	f.lastTs = now
 
 	// 2) 滑动窗口限流

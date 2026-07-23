@@ -74,21 +74,25 @@ func CmdChatExHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *code
 
 	// 创建聊天消息
 	chatMsg := &chat_msg.MsgMessageEx{
-		Channel:   int32(channel),
-		ID:        chara.ID,
-		Name:      chara.Name,
-		Msg:       msg,
-		Time:      int32(time.Now().Unix()),
-		Privilege: 0, // chara.Privilege 暂未定义
-		LineName:  "line1",
-		ShowExtra: 0, // 文字消息
-		Compress:  compress,
-		OrgLength: orgLength,
-		CardCount: cardCount,
-		CardId:    "",
-		VoiceTime: voiceTime,
-		Token:     token,
-		Checksum:  0,
+		Channel:         int32(channel),
+		ID:              chara.ID,
+		Name:            chara.Name,
+		Msg:             msg,
+		Time:            int32(time.Now().Unix()),
+		Privilege:       0, // chara.Privilege 暂未定义
+		LineName:        "line1",
+		ShowExtra:       0, // 文字消息
+		Compress:        compress,
+		OrgLength:       orgLength,
+		CardCount:       cardCount,
+		Cards:           []chat_msg.ChatCard{},
+		VoiceTime:       voiceTime,
+		Token:           token,
+		Checksum:        0,
+		FilteredMsg:     "",
+		MapSize:         0,
+		ItemCookieCount: 0,
+		TipIndex:        0,
 	}
 
 	// 根据频道类型发送消息
@@ -169,21 +173,25 @@ func CmdFriendTellExHandler(ctx context.MyCmdContext, frame *codec.Frame, reader
 
 	// 创建聊天消息
 	chatMsg := &chat_msg.MsgMessageEx{
-		Channel:   CHAT_CHANNEL_FRIEND,
-		ID:        chara.ID,
-		Name:      chara.Name,
-		Msg:       msg,
-		Time:      int32(time.Now().Unix()),
-		Privilege: 0, // chara.Privilege 暂未定义
-		LineName:  "line1",
-		ShowExtra: 0,
-		Compress:  compress,
-		OrgLength: orgLength,
-		CardCount: cardCount,
-		CardId:    "",
-		VoiceTime: voiceTime,
-		Token:     token,
-		Checksum:  0,
+		Channel:         CHAT_CHANNEL_FRIEND,
+		ID:              chara.ID,
+		Name:            chara.Name,
+		Msg:             msg,
+		Time:            int32(time.Now().Unix()),
+		Privilege:       0, // chara.Privilege 暂未定义
+		LineName:        "line1",
+		ShowExtra:       0,
+		Compress:        compress,
+		OrgLength:       orgLength,
+		CardCount:       cardCount,
+		Cards:           []chat_msg.ChatCard{},
+		VoiceTime:       voiceTime,
+		Token:           token,
+		Checksum:        0,
+		FilteredMsg:     "",
+		MapSize:         0,
+		ItemCookieCount: 0,
+		TipIndex:        0,
 	}
 
 	log.Info("[chat] 私聊成功 from=%s to=%s msg=%s", chara.Name, targetChara.Name, msg)

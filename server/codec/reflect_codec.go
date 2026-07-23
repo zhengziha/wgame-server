@@ -8,6 +8,7 @@
 // 支持的 tag type（不区分大小写）：
 //
 //	bool     1 字节布尔         WriteBoolean / ReadBoolean
+//	byte     1 字节有符号       WriteByte    / ReadByte
 //	ubyte    1 字节无符号       WriteUByte   / ReadUByte
 //	short    2 字节有符号       WriteShort   / ReadShort
 //	ushort   2 字节无符号       WriteUShort  / ReadUShort
@@ -39,7 +40,8 @@
 // 类型缺省推断（与现有 Java 协议一致，Level 用 Go 的 int 也写成 4 字节）：
 //
 //	bool         → bool
-//	int8/uint8   → ubyte
+//	int8         → byte
+//	uint8        → ubyte
 //	int16        → short
 //	uint16       → ushort
 //	int32        → int
@@ -65,21 +67,23 @@ import (
 
 // codecTag 支持的编码类型常量（小写形式）
 const (
-	tagBool    = "bool"
-	tagUByte   = "ubyte"
-	tagShort   = "short"
-	tagUShort  = "ushort"
-	tagInt     = "int"
-	tagUInt    = "uint"
-	tagLong    = "long"
-	tagULong   = "ulong"
-	tagFloat   = "float"
-	tagDouble  = "double"
-	tagString  = "string"
-	tagString2 = "string2"
-	tagString4 = "string4"
-	tagBytes   = "bytes"
-	tagList    = "list" // 对象数组，可带 "list:<lentype>"
+	tagBool       = "bool"
+	tagByte       = "byte"       // 有符号 1 字节，对应 Java writeByte/readByte
+	tagUByte      = "ubyte"      // 无符号 1 字节，对应 Java writeUnsignedByte
+	tagShort      = "short"      // 有符号 2 字节
+	tagUShort     = "ushort"     // 无符号 2 字节
+	tagInt        = "int"        // 有符号 4 字节
+	tagUInt       = "uint"       // 无符号 4 字节
+	tagLong       = "long"       // 有符号 8 字节
+	tagULong      = "ulong"      // 无符号 8 字节
+	tagFloat      = "float"      // 4 字节 IEEE754
+	tagDouble     = "double"     // 8 字节 IEEE754
+	tagString     = "string"     // 1 字节长度前缀 + GBK
+	tagString2    = "string2"    // 2 字节长度前缀 + GBK
+	tagString4    = "string4"    // 4 字节长度前缀 + GBK
+	tagBytes      = "bytes"      // 2 字节长度前缀 + 原始字节
+	tagList       = "list"       // 对象数组，可带 "list:<lentype>"
+	tagBuildField = "buildfield" // BuildFieldsNew 格式，带类型标记前缀
 )
 
 // defaultListLenType 对象数组默认长度前缀类型。
@@ -169,6 +173,27 @@ func isListTag(typ string) bool {
 	return typ == tagList || strings.HasPrefix(typ, tagList+":")
 }
 
+// isBuildFieldTag 判断 tag 是否为 BuildFieldsNew 格式
+func isBuildFieldTag(typ string) bool {
+	return strings.HasPrefix(typ, tagBuildField+":")
+}
+
+// parseBuildFieldTag 从 "buildfield:<type>:<key>" 中提取 type 和 key
+// 返回 (fieldType, key, error)
+func parseBuildFieldTag(typ string) (string, int16, error) {
+	parts := strings.SplitN(typ, ":", 3)
+	if len(parts) != 3 {
+		return "", 0, fmt.Errorf("codec: invalid buildfield tag %q, expected 'buildfield:<type>:<key>'", typ)
+	}
+	fieldType := parts[1]
+	var key int16
+	n, err := fmt.Sscanf(parts[2], "%d", &key)
+	if err != nil || n != 1 {
+		return "", 0, fmt.Errorf("codec: invalid buildfield key %q in tag %q", parts[2], typ)
+	}
+	return fieldType, key, nil
+}
+
 // parseListLenType 从 "list:<lentype>" 中提取 lentype；无后缀返回默认 short。
 func parseListLenType(typ string) string {
 	if idx := strings.Index(typ, ":"); idx >= 0 {
@@ -211,9 +236,14 @@ func writeField(w *GameWriter, f reflect.StructField, v reflect.Value) error {
 	if isListTag(typ) {
 		return writeList(w, f, v, parseListLenType(typ))
 	}
+	if isBuildFieldTag(typ) {
+		return writeBuildField(w, typ, f, v)
+	}
 	switch typ {
 	case tagBool:
 		w.WriteBoolean(v.Bool())
+	case tagByte:
+		w.WriteByte(int8(intVal(v)))
 	case tagUByte:
 		w.WriteUByte(int(intVal(v)))
 	case tagShort:
@@ -246,6 +276,58 @@ func writeField(w *GameWriter, f reflect.StructField, v reflect.Value) error {
 	return nil
 }
 
+// writeBuildField 写入 BuildFieldsNew 格式的字段
+// Java格式：先写2字节key(short)，再写1字节类型标记(3=int,4=string)，最后写值
+func writeBuildField(w *GameWriter, tag string, f reflect.StructField, v reflect.Value) error {
+	fieldType, key, err := parseBuildFieldTag(tag)
+	if err != nil {
+		return err
+	}
+	// 先写2字节key
+	w.WriteShort(key)
+	// 再写1字节类型标记
+	switch fieldType {
+	case tagInt, tagLong, tagShort, tagByte, tagUByte, tagUInt, tagULong, tagUShort:
+		w.WriteByte(3) // 3=整数类型
+	case tagString, tagString2:
+		w.WriteByte(4) // 4=字符串类型
+	default:
+		return fmt.Errorf("codec: unsupported buildfield type %q on field %s", fieldType, f.Name)
+	}
+	// 最后写实际值
+	switch fieldType {
+	case tagBool:
+		w.WriteBoolean(v.Bool())
+	case tagByte:
+		w.WriteByte(int8(intVal(v)))
+	case tagUByte:
+		w.WriteUByte(int(intVal(v)))
+	case tagShort:
+		w.WriteShort(int16(intVal(v)))
+	case tagUShort:
+		w.WriteUShort(uint16(intVal(v)))
+	case tagInt:
+		w.WriteInt(int32(intVal(v)))
+	case tagUInt:
+		w.WriteUInt(uint32(intVal(v)))
+	case tagLong:
+		w.WriteLong(intVal(v))
+	case tagULong:
+		w.WriteLong(int64(uint64(intVal(v))))
+	case tagFloat:
+		w.WriteFloat(float32(v.Float()))
+	case tagDouble:
+		w.WriteDouble(v.Float())
+	case tagString:
+		w.WriteString(v.String())
+	case tagString2:
+		w.WriteString2(v.String())
+	default:
+		return fmt.Errorf("codec: unsupported buildfield type %q on field %s", fieldType, f.Name)
+	}
+	return nil
+}
+
 func readField(r *GameReader, f reflect.StructField, v reflect.Value) error {
 	typ, err := fieldCodecType(f)
 	if err != nil {
@@ -257,6 +339,9 @@ func readField(r *GameReader, f reflect.StructField, v reflect.Value) error {
 	if isListTag(typ) {
 		return readList(r, f, v, parseListLenType(typ))
 	}
+	if isBuildFieldTag(typ) {
+		return readBuildField(r, typ, f, v)
+	}
 	switch typ {
 	case tagBool:
 		b, err := r.ReadBoolean()
@@ -264,6 +349,12 @@ func readField(r *GameReader, f reflect.StructField, v reflect.Value) error {
 			return err
 		}
 		v.SetBool(b)
+	case tagByte:
+		n, err := r.ReadByte()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, int64(n))
 	case tagUByte:
 		n, err := r.ReadUByte()
 		if err != nil {
@@ -344,6 +435,109 @@ func readField(r *GameReader, f reflect.StructField, v reflect.Value) error {
 		v.SetBytes(b)
 	default:
 		return fmt.Errorf("codec: unknown codec tag %q on field %s", typ, f.Name)
+	}
+	return nil
+}
+
+// readBuildField 读取 BuildFieldsNew 格式的字段
+// Java格式：先读2字节key(short)，再读1字节类型标记(3=int,4=string)，最后读值
+func readBuildField(r *GameReader, tag string, f reflect.StructField, v reflect.Value) error {
+	fieldType, _, err := parseBuildFieldTag(tag)
+	if err != nil {
+		return err
+	}
+	// 先读2字节key（跳过）
+	_, err = r.ReadShort()
+	if err != nil {
+		return err
+	}
+	// 再读1字节类型标记（跳过，用于验证）
+	_, err = r.ReadByte()
+	if err != nil {
+		return err
+	}
+	// 最后读实际值
+	switch fieldType {
+	case tagBool:
+		b, err := r.ReadBoolean()
+		if err != nil {
+			return err
+		}
+		v.SetBool(b)
+	case tagByte:
+		n, err := r.ReadByte()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, int64(n))
+	case tagUByte:
+		n, err := r.ReadUByte()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, int64(n))
+	case tagShort:
+		n, err := r.ReadShort()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, int64(n))
+	case tagUShort:
+		n, err := r.ReadUShort()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, int64(n))
+	case tagInt:
+		n, err := r.ReadInt()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, int64(n))
+	case tagUInt:
+		n, err := r.ReadUInt()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, int64(n))
+	case tagLong:
+		n, err := r.ReadLong()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, n)
+	case tagULong:
+		n, err := r.ReadLong()
+		if err != nil {
+			return err
+		}
+		setIntVal(v, n)
+	case tagFloat:
+		n, err := r.ReadUInt()
+		if err != nil {
+			return err
+		}
+		v.SetFloat(float64(math.Float32frombits(n)))
+	case tagDouble:
+		n, err := r.ReadLong()
+		if err != nil {
+			return err
+		}
+		v.SetFloat(math.Float64frombits(uint64(n)))
+	case tagString:
+		s, err := r.ReadString()
+		if err != nil {
+			return err
+		}
+		v.SetString(s)
+	case tagString2:
+		s, err := r.ReadString2()
+		if err != nil {
+			return err
+		}
+		v.SetString(s)
+	default:
+		return fmt.Errorf("codec: unsupported buildfield type %q on field %s", fieldType, f.Name)
 	}
 	return nil
 }
@@ -479,7 +673,9 @@ func defaultCodecType(t reflect.Type) string {
 	switch t.Kind() {
 	case reflect.Bool:
 		return tagBool
-	case reflect.Int8, reflect.Uint8:
+	case reflect.Int8:
+		return tagByte
+	case reflect.Uint8:
 		return tagUByte
 	case reflect.Int16:
 		return tagShort

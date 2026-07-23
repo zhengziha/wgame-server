@@ -48,6 +48,14 @@ type Frame struct {
 	Body       []byte // 不含 cmd，仅 payload
 }
 
+// NO_ENC_CMDs Java端BaseWrite中定义的不加密CMD列表
+// 对应Java: public static final String NO_ENC = "45143#45555#13143";
+var NO_ENC_CMDs = map[uint16]bool{
+	45143: true, // MSG_L_WAIT_IN_LINE
+	45555: true, // MSG_L_START_LOGIN
+	13143: true, // MSG_L_AGENT_RESULT
+}
+
 // EncodeFrame 组装一个完整的出站帧字节切片（含加密）。
 //
 // 参数：
@@ -64,9 +72,16 @@ func EncodeFrame(tableIndex int, tickCount int32, cmd uint16, payload []byte) ([
 
 	buf := make([]byte, 0, HeaderSize+bodyLen)
 	var hdr [HeaderSize]byte
-	binary.BigEndian.PutUint16(hdr[0:2], Magic)
-	binary.BigEndian.PutUint16(hdr[2:4], uint16(tableIndex))
-	binary.BigEndian.PutUint32(hdr[4:8], uint32(tickCount))
+
+	if NO_ENC_CMDs[cmd] {
+		binary.BigEndian.PutUint16(hdr[0:2], Magic)
+		binary.BigEndian.PutUint16(hdr[2:4], 0)          // tableIndex=0
+		binary.BigEndian.PutUint32(hdr[4:8], uint32(0)) // tickCount=0
+	} else {
+		binary.BigEndian.PutUint16(hdr[0:2], Magic)
+		binary.BigEndian.PutUint16(hdr[2:4], uint16(tableIndex))
+		binary.BigEndian.PutUint32(hdr[4:8], uint32(tickCount))
+	}
 	binary.BigEndian.PutUint16(hdr[8:10], uint16(bodyLen))
 	buf = append(buf, hdr[:]...)
 
@@ -77,7 +92,7 @@ func EncodeFrame(tableIndex int, tickCount int32, cmd uint16, payload []byte) ([
 	buf = append(buf, payload...)
 
 	// 加密 body 区（含 cmd）
-	if tableIndex >= 1 && tableIndex <= TableSize {
+	if !NO_ENC_CMDs[cmd] && tableIndex >= 1 && tableIndex <= TableSize {
 		EncryptBody(tableIndex, buf[HeaderSize:])
 	}
 	return buf, nil

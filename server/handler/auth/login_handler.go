@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"time"
 	"wgame-server/comm/log"
 	"wgame-server/server/codec"
 	"wgame-server/server/context"
@@ -10,6 +11,7 @@ import (
 	map_handler "wgame-server/server/handler/map"
 	"wgame-server/server/model"
 	"wgame-server/server/msg/auth"
+	"wgame-server/server/msg/system"
 	"wgame-server/server/network/handler"
 )
 
@@ -43,7 +45,8 @@ func CmdAccountHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *cod
 	}
 
 	var accounts model.Accounts
-	result := db.AuthGORM().Where("name = ?", account).First(&accounts)
+	account = account[6:]
+	result := db.AuthGORM().Where("token = ?", account).First(&accounts)
 	if result.Error != nil {
 		log.Error("[auth] 账号不存在 account=%s", account)
 		ctx.Write(&auth.MsgAuth{Msg: "验证不通过，请重新登录。"})
@@ -64,8 +67,15 @@ func CmdAccountHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *cod
 		log.Info("[auth] 登录预览 type=%s", reqType)
 		// 发送登录预览玩家列表和登录开始消息
 		ctx.Write(&auth.MsgLoginPreviewPlayer{
-			Account: account,
-			Data:    "",
+			ServerTime: int32(time.Now().Unix()),
+			TimeZone:   8,
+			Account:    account,
+			Gid:        "",
+			Time:       int32(time.Now().Unix()),
+			Cookie:     "47Q60635Q22",
+			ServerName: dist,
+			IP:         "192.168.1.63",
+			Port:       8800,
 		})
 		ctx.Write(&auth.MsgStartLogin{
 			Type:   "normal",
@@ -75,16 +85,18 @@ func CmdAccountHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *cod
 	}
 
 	ctx.Write(&auth.MsgAgentResult{
+		AuthKey:      0,
 		Result:       1,
-		ID:           int32(accounts.ID),
-		Privilege:    accounts.Privilege,
-		IP:           "127.0.0.1",
+		Privilege:    0,
+		IP:           "192.168.1.63",
 		Port:         8800,
+		Seed:         0,
+		ID:           1,
 		ServerName:   dist,
 		ServerStatus: 1,
 		Msg:          "允许该账号登录",
 	})
-
+	log.Info("[auth] 客户端请求登录账号，允许该账号登录 type=%s account=%s mac=%s dist=%s", reqType, account, mac, dist)
 	return nil
 }
 
@@ -114,7 +126,8 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 	}
 
 	var accounts model.Accounts
-	result := db.AuthGORM().Where("name = ?", user).First(&accounts)
+	user = user[6:]
+	result := db.AuthGORM().Where("token = ?", user).First(&accounts)
 	if result.Error != nil {
 		log.Error("[auth] 非法登录，账号不存在 user=%s", user)
 		ctx.Write(&auth.MsgKickOff{Msg: "非法登录，账号不存在！"})
@@ -126,36 +139,34 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 	var characters []model.Characters
 	db.GORM().Where("account_id = ?", accounts.ID).Find(&characters)
 
-	accountOnline := int32(0)
-	voList := make([]*auth.VoExistedChar, 0, len(characters))
-	for _, chara := range characters {
-		vo := &auth.VoExistedChar{
-			CharID:          int32(chara.ID),
-			Name:            chara.Name,
-			Level:           chara.Level,
-			Polar:           chara.Polar,
-			Sex:             chara.Sex,
-			OnlineState:     chara.Online,
-			FashionIcon:     0,
-			UpgradeLevel:    0,
-			PetIcon:         0,
-			MountIcon:       0,
-			SpecialIcon:     0,
-			GenchongIcon:    0,
-			UpgradeType:     0,
-			Nice:            0,
-			WeeklyLoginDays: 0,
-			IsFeisheng:      0,
-			Tao:             chara.MonthTao,
-			Gid:             chara.Gid,
-			MapID:           chara.MapId,
-			MapName:         chara.MapName,
-			Line:            1,
-			X:               chara.X,
-			Y:               chara.Y,
-			PartyName:       "",
-			Family:          "",
-			Title:           "",
+	accountOnline := int8(0)
+	voList := make([]auth.VoExistedChar, 0, len(characters))
+	var firstChara *model.Characters
+	for i, chara := range characters {
+		if i == 0 {
+			firstChara = &chara
+		}
+		vo := auth.VoExistedChar{
+			Fixed17:              17,
+			LeftTimeToDelete:     0,
+			CharOnlineState:      chara.Online,
+			TradingGoodsGid:      "",
+			Portrait:             0,
+			TradingState:         0,
+			TradingAppointeeName: "",
+			TradingLeftTime:      0,
+			Level:                chara.Level,
+			Polar:                chara.Polar,
+			Icon:                 0,
+			Name:                 chara.Name,
+			Gid:                  chara.Gid,
+			TradingOrgPrice:      0,
+			TradingBuyoutPrice:   0,
+			TradingCgPriceCt:     0,
+			TradingPrice:         0,
+			TradingSellBuyType:   0,
+			LastLoginTime:        0,
+			LoginMac:             "",
 		}
 		voList = append(voList, vo)
 
@@ -166,16 +177,30 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 	}
 
 	ctx.Write(&auth.MsgExistedCharList{
-		AccountOnline: accountOnline,
-		VoList:        voList,
+		SeverState:     0,
+		CharCount:      int16(len(voList)),
+		Chars:          voList,
+		OpenServerTime: 0,
+		AccountOnline:  accountOnline,
+		LineName:       "",
 	})
 
-	ctx.Write(&auth.MsgShowReconnectPara{
-		IP:      "127.0.0.1",
-		Port:    8800,
-		AuthKey: authKey,
-		Seed:    seed,
-	})
+	// 如果有角色，使用第一个角色的信息
+	if firstChara != nil {
+		ctx.Write(&auth.MsgShowReconnectPara{
+			Name: firstChara.Name,
+			Para: "",
+			Gid:  firstChara.Gid,
+			Dist: "127.0.0.1:8800",
+		})
+	} else {
+		ctx.Write(&auth.MsgShowReconnectPara{
+			Name: "",
+			Para: "",
+			Gid:  "",
+			Dist: "127.0.0.1:8800",
+		})
+	}
 
 	return nil
 }
@@ -264,7 +289,8 @@ func CmdGetServerListHandler(ctx context.MyCmdContext, frame *codec.Frame, reade
 	log.Info("[auth] 客户端请求服务器列表 account=%s", account)
 
 	var accounts model.Accounts
-	result := db.AuthGORM().Where("name = ?", account).First(&accounts)
+	account = account[6:]
+	result := db.AuthGORM().Where("token = ?", account).First(&accounts)
 	if result.Error != nil {
 		log.Error("[auth] 账号不存在 account=%s", account)
 		ctx.Write(&auth.MsgAuth{Msg: "账号认证已过期,无法登录。"})
@@ -284,9 +310,9 @@ func CmdRequestLineInfoHandler(ctx context.MyCmdContext, frame *codec.Frame, rea
 	account, _ := reader.ReadString()
 
 	log.Info("[auth] 客户端请求线路信息 account=%s", account)
-
 	var accounts model.Accounts
-	result := db.AuthGORM().Where("name = ?", account).First(&accounts)
+	account = account[6:]
+	result := db.AuthGORM().Where("token = ?", account).First(&accounts)
 	if result.Error != nil {
 		log.Error("[auth] 登录信息已失效 account=%s", account)
 		ctx.Write(&auth.MsgAuth{Msg: "登录信息已失效，请重新登录。"})
@@ -294,28 +320,35 @@ func CmdRequestLineInfoHandler(ctx context.MyCmdContext, frame *codec.Frame, rea
 		return nil
 	}
 
-	// 获取角色的元宝数量（取第一个角色的元宝）
-	var characters []model.Characters
-	db.GORM().Where("account_id = ?", accounts.ID).First(&characters)
-	goldCoin := int32(0)
-	if len(characters) > 0 {
-		goldCoin = characters[0].GoldCoin
-	}
-
-	// 发送线路信息
-	ctx.Write(&auth.MsgWaitInLine{
-		LineName:        "line1", // 默认线路名
-		ExpectTime:      0,       // 无需等待
-		ReconnectTime:   0,       // 无需重连
-		WaitCode:        0,       // 排名
-		Count:           1,       // 线路数量
-		KeepAlive:       0,       // 保持连接
-		NeedWait:        1,       // 显示线路和排名
-		InsiderLv:       0,       // 会员等级
-		GoldCoin:        goldCoin,
-		Status:          0, // 正常
-		StartServerTime: 0, // 开服时间（暂不设置）
-	})
+	sendAdmittedLineInfoAndStart(ctx)
 
 	return nil
+}
+
+// sendAdmittedLineInfoAndStart 参考 Java 端 LoginLineQueue.sendAdmittedLineInfoAndStart 方法
+// 放行后，按原协议顺序下发"线路信息/开始登录/客户端连接确认"
+func sendAdmittedLineInfoAndStart(ctx context.MyCmdContext) {
+	ctx.Write(system.NewMsgReplyServerTime())
+	ctx.Write(&auth.MsgWaitInLine{
+		LineName:             "普通通道",
+		ExpectTime:           180000,
+		ReconnectTime:        180000,
+		WaitCode:             1,
+		Count:                1,
+		KeepAlive:            1,
+		NeedWait:             0,
+		InsiderLv:            1,
+		GoldCoin:             0,
+		Status:               1,
+		StartServerTime:      int32(time.Now().Unix()),
+		LeftGiveLotteryTimes: 1000,
+	})
+	ctx.Write(&auth.MsgStartLogin{
+		Type:   "normal",
+		Cookie: "47Q60635Q22",
+	})
+	ctx.Write(&auth.MsgCheckUserData{
+		Result: 1,
+		Cookie: "47Q60635Q22",
+	})
 }

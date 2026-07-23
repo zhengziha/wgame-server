@@ -61,10 +61,10 @@ func CmdMultiMoveToHandler(ctx context.MyCmdContext, frame *codec.Frame, reader 
 
 	// 发送移动消息给自己
 	ctx.Write(&map_msg.MsgMoved{
-		ID:  int32(chara.ID),
-		X:   x,
-		Y:   y,
-		Dir: int32(dir),
+		ID:  chara.ID,
+		X:   int16(x),
+		Y:   int16(y),
+		Dir: int8(dir),
 	})
 
 	// 发送移动消息给视野内的其他玩家（排除新进入视野的玩家）
@@ -116,10 +116,10 @@ func CmdOtherMoveToHandler(ctx context.MyCmdContext, frame *codec.Frame, reader 
 
 	// 发送移动消息给自己
 	ctx.Write(&map_msg.MsgMoved{
-		ID:  int32(chara.ID),
-		X:   chara.X,
-		Y:   chara.Y,
-		Dir: chara.Dir,
+		ID:  chara.ID,
+		X:   int16(chara.X),
+		Y:   int16(chara.Y),
+		Dir: int8(chara.Dir),
 	})
 
 	// 发送移动消息给视野内的其他玩家（排除新进入视野的玩家）
@@ -155,10 +155,10 @@ func sendMoveMessages(chara *game.Chara, gameMap *game.GameMap, gid string, appe
 	for _, otherGid := range nearbyGids {
 		if otherGid != gid && !appearSet[otherGid] { // 不发给自己，也不发给新进入视野的玩家
 			broadcaster.SendToGid(&map_msg.MsgMoved{
-				ID:  int32(chara.ID),
-				X:   chara.X,
-				Y:   chara.Y,
-				Dir: chara.Dir,
+				ID:  chara.ID,
+				X:   int16(chara.X),
+				Y:   int16(chara.Y),
+				Dir: int8(chara.Dir),
 			}, otherGid)
 		}
 	}
@@ -171,18 +171,65 @@ func sendAppearMessages(chara *game.Chara, appearList []string) {
 		if otherChara != nil {
 			log.Info("[move] notify %s about appear of %s", otherChara.Name, chara.Name)
 			broadcaster.SendToGid(&map_msg.MsgAppear{
-				CharID:      chara.ID,
-				Name:        chara.Name,
-				Gid:         chara.Gid,
-				Level:       chara.Level,
-				Polar:       chara.Polar,
-				Sex:         chara.Sex,
-				X:           chara.X,
-				Y:           chara.Y,
-				Dir:         chara.Dir,
-				Waiguan:     chara.Waiguan,
-				Nice:        chara.Nice,
-				FashionIcon: 0,
+				ID:                 chara.ID,
+				X:                  int16(chara.X),
+				Y:                  int16(chara.Y),
+				Dir:                int16(chara.Dir),
+				Icon:               0,
+				WeaponIcon:         0,
+				Type:               int16(chara.Sex),
+				SubType:            0,
+				OwnerID:            0,
+				LeaderID:           0,
+				Name:               chara.Name,
+				Level:              int16(chara.Level),
+				Title:              "",
+				Family:             "",
+				Party:              "",
+				Status:             0,
+				SpecialIcon:        0,
+				OrgIcon:            0,
+				SuitIcon:           0,
+				SuitLight:          0,
+				GuardIcon:          0,
+				PetIcon:            0,
+				ShadowIcon:         0,
+				ShelterIcon:        0,
+				MountIcon:          0,
+				AliName:            "",
+				Gid:                chara.Gid,
+				Camp:               "",
+				VipType:            0,
+				IsHide:             0,
+				MoveSpeed:          0,
+				Score:              0,
+				Opacity:            0,
+				Masquerade:         0,
+				UpgradeState:       0,
+				UpgradeType:        0,
+				Obstacle:           0,
+				EffectCount:        0,
+				Effects:            []int32{},
+				ShareMountIcon:     0,
+				ShareMountLeaderID: 0,
+				ShareMountShadow:   0,
+				GatherCount:        0,
+				GatherMountIcons:   []int32{},
+				GatherNameNum:      0,
+				GatherNames:        []string{},
+				Portrait:           0,
+				CustomIcon:         "",
+				TeamIcon:           0,
+				ExtraScale:         0,
+				GatherSuitIcons:    0,
+				BanRule:            "",
+				TitleBanRule:       "",
+				XOffset:            0,
+				YOffset:            0,
+				MoveType:           0,
+				FlyType:            0,
+				MoveIDCount:        0,
+				MoveIDs:            []int32{},
 			}, otherGid)
 		}
 	}
@@ -196,6 +243,7 @@ func sendDisappearMessages(charID int32, disappearList []string) {
 			log.Info("[move] notify %s about disappear", otherChara.Name)
 			broadcaster.SendToGid(&map_msg.MsgDisappear{
 				CharID: charID,
+				Type:   1,
 			}, otherGid)
 		}
 	}

@@ -87,6 +87,16 @@ func (r *GameReader) ReadUByte() (int, error) {
 	return v, nil
 }
 
+// ReadByte 读取 1 字节有符号（返回 int8，与 Java GameReadTool.readByte 对应）
+func (r *GameReader) ReadByte() (int8, error) {
+	if r.Remaining() < 1 {
+		return 0, ErrShortBuffer
+	}
+	v := int8(r.buf[r.pos])
+	r.pos++
+	return v, nil
+}
+
 // ReadBoolean 读取 1 字节布尔（0/1）
 func (r *GameReader) ReadBoolean() (bool, error) {
 	b, err := r.ReadUByte()

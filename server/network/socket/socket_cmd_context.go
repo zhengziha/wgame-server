@@ -97,6 +97,8 @@ func (c *SocketCmdContext) Write(msgObj interface{}) {
 			m.Cmd(), c.sessionId, err)
 		return
 	}
+	log.Info("[socket] Write frame cmd=0x%04X(%d) sid=%d len=%d hex=%x",
+		m.Cmd(), m.Cmd(), c.sessionId, len(data), data)
 	c.enqueueFrame(data)
 }
 

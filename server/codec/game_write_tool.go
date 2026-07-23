@@ -28,9 +28,14 @@ func (w *GameWriter) Len() int {
 	return len(w.buf)
 }
 
-// WriteUByte 写入 1 字节（参数以 int 传入，仅取低 8 位）
+// WriteUByte 写入 1 字节无符号（参数以 int 传入，仅取低 8 位）
 func (w *GameWriter) WriteUByte(b int) {
 	w.buf = append(w.buf, byte(b&0xFF))
+}
+
+// WriteByte 写入 1 字节有符号（对应 Java GameWriteTool.writeByte）
+func (w *GameWriter) WriteByte(b int8) {
+	w.buf = append(w.buf, byte(b))
 }
 
 // WriteBoolean 写入 1 字节布尔

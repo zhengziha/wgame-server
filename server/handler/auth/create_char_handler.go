@@ -82,49 +82,47 @@ func CmdCreateNewCharHandler(ctx context.MyCmdContext, frame *codec.Frame, reade
 	log.Info("[auth] 创建角色成功 id=%d name=%s gid=%s", characters.ID, charName, newUUID)
 
 	ctx.Write(&auth.MsgCreateNewChar{
-		Name: charName,
 		Gid:  newUUID,
+		Name: charName,
 	})
 
 	var charList []model.Characters
 	db.GORM().Where("account_id = ?", accountID).Find(&charList)
 
-	voList := make([]*auth.VoExistedChar, 0, len(charList))
+	voList := make([]auth.VoExistedChar, 0, len(charList))
 	for _, chara := range charList {
-		vo := &auth.VoExistedChar{
-			CharID:          int32(chara.ID),
-			Name:            chara.Name,
-			Level:           chara.Level,
-			Polar:           chara.Polar,
-			Sex:             chara.Sex,
-			OnlineState:     chara.Online,
-			FashionIcon:     0,
-			UpgradeLevel:    0,
-			PetIcon:         0,
-			MountIcon:       0,
-			SpecialIcon:     0,
-			GenchongIcon:    0,
-			UpgradeType:     0,
-			Nice:            0,
-			WeeklyLoginDays: 0,
-			IsFeisheng:      0,
-			Tao:             chara.MonthTao,
-			Gid:             chara.Gid,
-			MapID:           chara.MapId,
-			MapName:         chara.MapName,
-			Line:            1,
-			X:               chara.X,
-			Y:               chara.Y,
-			PartyName:       "",
-			Family:          "",
-			Title:           "",
+		vo := auth.VoExistedChar{
+			Fixed17:              17,
+			LeftTimeToDelete:     0,
+			CharOnlineState:      chara.Online,
+			TradingGoodsGid:      "",
+			Portrait:             0,
+			TradingState:         0,
+			TradingAppointeeName: "",
+			TradingLeftTime:      0,
+			Level:                chara.Level,
+			Polar:                chara.Polar,
+			Icon:                 0,
+			Name:                 chara.Name,
+			Gid:                  chara.Gid,
+			TradingOrgPrice:      0,
+			TradingBuyoutPrice:   0,
+			TradingCgPriceCt:     0,
+			TradingPrice:         0,
+			TradingSellBuyType:   0,
+			LastLoginTime:        0,
+			LoginMac:             "",
 		}
 		voList = append(voList, vo)
 	}
 
 	ctx.Write(&auth.MsgExistedCharList{
-		AccountOnline: 0,
-		VoList:        voList,
+		SeverState:     0,
+		CharCount:      int16(len(voList)),
+		Chars:          voList,
+		OpenServerTime: 0,
+		AccountOnline:  0,
+		LineName:       "",
 	})
 
 	return nil
