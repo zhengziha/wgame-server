@@ -90,6 +90,11 @@ func (s *Server) Stop() {
 }
 
 // handleConn 处理一条新连接：构造 ctx、启动 read/send loop、等待退出。
+//
+// Java 对比：
+//   - go s.sendLoop(ctx, sendDone) 启动一个新的 goroutine，类似 new Thread(() -> ...).start()
+//   - make(chan struct{}) 创建一个无类型的 channel，用于同步通知（类似 CountDownLatch）
+//   - <-sendDone 阻塞等待 channel 关闭，类似 latch.await()
 func (s *Server) handleConn(c net.Conn) {
 	tcp := newTCPConn(c)
 	sid := atomic.AddInt32(&s.sessionIdSeq, 1)
@@ -104,14 +109,14 @@ func (s *Server) handleConn(c net.Conn) {
 	}
 
 	// sendLoop 在单独 goroutine 运行
-	sendDone := make(chan struct{})
-	go s.sendLoop(ctx, sendDone)
+	sendDone := make(chan struct{}) // 用于同步：sendLoop 结束后通知
+	go s.sendLoop(ctx, sendDone)    // 启动新的 goroutine（轻量级线程，类似协程）
 
 	// readLoop 在当前 goroutine 运行；
 	// 退出后由 Disconnect 关闭 conn + sendQ，使 sendLoop 一同退出。
 	s.readLoop(ctx)
 	ctx.Disconnect()
-	<-sendDone
+	<-sendDone // 阻塞等待 sendLoop 完成（channel 关闭时解除阻塞）
 
 	// 主线程内统一处理 onDisconnect + 移除 broadcaster
 	main_thread.Process(func() {

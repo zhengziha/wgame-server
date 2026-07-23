@@ -22,7 +22,8 @@ func NewRedisCache(cli *redis.Client) *RedisCache {
 	return &RedisCache{Cli: cli}
 }
 
-// Compile-time check
+// 编译期接口检查：确保 *RedisCache 实现了 Cache 接口
+// 相当于 Java 中的: class RedisCache implements Cache { ... }
 var _ Cache = (*RedisCache)(nil)
 
 func (c *RedisCache) GetRaw(ctx context.Context, key string) ([]byte, error) {

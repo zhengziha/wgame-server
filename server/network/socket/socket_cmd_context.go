@@ -17,17 +17,24 @@ import (
 //
 // 写路径：handler 调用 Write -> 编码帧 -> 写 chan sendQ -> sendLoop 持续 flush。
 // 读路径：readLoop 读帧 -> firewall.Check -> 主线程 dispatch handler。
+//
+// Java 对比：
+//   - chan []byte 类似于 BlockingQueue<byte[]>，用于 goroutine 间通信
+//   - atomic.Bool 类似于 AtomicBoolean
+//   - interface{} 类似于 Object 类型，可以接收任何类型
+//   - 类型断言 msgObj.(msg.OutMessage) 类似于 (OutMessage) msgObj 强制转换
 type SocketCmdContext struct {
 	session *session.GameSession
 
 	conn *tcpConn // 由 server.go 内部持有，避免直接暴露 net.Conn
 
 	// 出站发送队列：handler 投递、sendLoop 消费
+	// 带缓冲的 channel（容量 256），类似 BlockingQueue
 	sendQ chan []byte
 
 	// 关闭状态
-	closed  atomic.Bool
-	closeMu sync.Mutex
+	closed  atomic.Bool // 原子变量，类似 Java 的 AtomicBoolean
+	closeMu sync.Mutex  // 保护 close 操作的互斥锁
 
 	// 防火墙
 	firewall *firewall.Firewall
@@ -42,7 +49,7 @@ func NewSocketCmdContext(c *tcpConn, sessionId int32, fw *firewall.Firewall) *So
 	ctx := &SocketCmdContext{
 		session:   sess,
 		conn:      c,
-		sendQ:     make(chan []byte, 256),
+		sendQ:     make(chan []byte, 256), // 创建带缓冲的 channel，容量 256
 		firewall:  fw,
 		sessionId: sessionId,
 	}
@@ -79,11 +86,17 @@ func (c *SocketCmdContext) GetClientIpAddr() string {
 // Write 把消息对象编码成帧并投递到发送队列。
 // msgObj 必须实现 msg.OutMessage，否则直接丢弃并记录。
 //
+// Java 对比：
+//   - msgObj.(msg.OutMessage) 是类型断言，类似于 (OutMessage) msgObj
+//   - select-case-default 类似于 tryOffer，非阻塞发送
+//
 // 错误处理策略：
 //   - msgObj 不是 OutMessage：记 Error（业务代码错误，必须修）
 //   - WriteFrame 编码失败（通常是反射 tag 错误）：记 Error（业务代码错误，必须修）
 //   - 连接已关闭：静默返回（正常生命周期事件，不是错误）
 func (c *SocketCmdContext) Write(msgObj interface{}) {
+	// 类型断言：检查 msgObj 是否实现了 OutMessage 接口
+	// Go 的 interface{} 类似于 Java 的 Object，可接收任何类型
 	m, ok := msgObj.(msg.OutMessage)
 	if !ok {
 		log.Error("[socket] Write rejected: msgObj %T does not implement msg.OutMessage; cmd sid=%d",
@@ -109,10 +122,15 @@ func (c *SocketCmdContext) enqueueFrame(data []byte) {
 		return
 	}
 	// closed-check 之后到 send 之间，sendQ 可能已被关闭，需要 recover
+	// recover() 类似 Java 的 try-catch，用于捕获 panic（类似 Java 的 RuntimeException）
+	// _ = recover() 忽略捕获到的 panic 值
 	defer func() { _ = recover() }()
+
+	// select-case-default 实现非阻塞 channel 发送
+	// 类似 Java 的 Queue.offer()（不阻塞，满则返回 false）
 	select {
-	case c.sendQ <- data:
-	default:
+	case c.sendQ <- data: // 成功发送到 channel
+	default: // channel 已满，执行此分支
 		// 队列满 -> 视为慢 client，主动断开
 		c.Disconnect()
 	}

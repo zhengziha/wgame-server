@@ -6,17 +6,23 @@ import (
 
 // CharaManager 角色管理器
 // 管理在线角色的生命周期
+//
+// Java 对比：
+//   - sync.Map 类似于 ConcurrentHashMap，并发安全的 map
+//   - sync.Once 类似于使用 volatile + synchronized 实现的单例模式（双重检查锁定）
+//   - Store/Load/Delete 对应 ConcurrentHashMap 的 put/get/remove
 type CharaManager struct {
-	charaMap   sync.Map // map[string]*Chara key=Gid
+	charaMap   sync.Map // map[string]*Chara key=Gid（并发安全，无需额外加锁）
 	charaIdMap sync.Map // map[int32]*Chara key=ID
 }
 
 var (
 	charaManagerInstance *CharaManager
-	charaManagerOnce     sync.Once
+	charaManagerOnce     sync.Once // 确保单例只初始化一次，线程安全
 )
 
 // Instance 返回 CharaManager 单例
+// sync.Once.Do 确保初始化逻辑只执行一次（类似 Java 的双重检查锁定单例）
 func CharaManagerInstance() *CharaManager {
 	charaManagerOnce.Do(func() {
 		charaManagerInstance = &CharaManager{

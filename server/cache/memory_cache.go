@@ -29,7 +29,8 @@ func NewMemoryCache() *MemoryCache {
 	return &MemoryCache{data: make(map[string]memEntry, 64)}
 }
 
-// Compile-time check
+// 编译期接口检查：确保 *MemoryCache 实现了 Cache 接口
+// 相当于 Java 中的: class MemoryCache implements Cache { ... }
 var _ Cache = (*MemoryCache)(nil)
 
 func (m *MemoryCache) GetRaw(ctx context.Context, key string) ([]byte, error) {

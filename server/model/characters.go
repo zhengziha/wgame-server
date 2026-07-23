@@ -6,8 +6,17 @@ import "time"
 // level 为 SQL 保留字，column tag 直接写列名，GORM 会自动加反引号。
 // chargeTotal/lastMonTao/lastDailyReset/lastWeeklyReset/otherGoods 在 Java 实体中声明，
 // wd-game-18.sql 建表语句未出现这些列，按普通列保留以兼容 Java 逻辑。
+//
+// Java 对比：
+//   - 结构体标签 `gorm:"column:xxx"` 类似于 JPA 的 @Column(name = "xxx")
+//   - `gorm:"primaryKey;autoIncrement"` 类似于 @Id + @GeneratedValue
+//   - `gorm:"size:255"` 类似于 @Column(length = 255)
+//   - `gorm:"autoCreateTime"` 类似于 @CreationTimestamp
+//   - `json:"id"` 标签用于 JSON 序列化时的字段名（类似 @JsonProperty）
 type Characters struct {
 	// ID 主键
+	// gorm 标签: 主键 + 自增 + 数据库列名
+	// json 标签: JSON 序列化时的字段名
 	ID int32 `gorm:"primaryKey;autoIncrement;column:id" json:"id"`
 
 	// Name 角色名

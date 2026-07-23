@@ -6,6 +6,10 @@
 //   - 复杂消息（如含 list 结构）使用 `codec:"list:..."` tag 声明
 //   - WriteFrame 把 OutMessage 编码为完整出站帧（含 10 字节头 + cmd + payload + 加密）
 //
+// Java 对比：
+//   - 结构体标签 `codec:"int"` 类似于 Java 中自定义注解，用于反射时确定序列化格式
+//   - tag 中的类型名对应 Java 的基本类型写入方法（WriteInt、WriteLong 等）
+//
 // 反射编解码底层位于 codec 包，支持的 tag 类型：
 //
 //	bool, ubyte, short, ushort, int, uint, long, ulong,
