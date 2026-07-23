@@ -67,7 +67,7 @@ func (l *GameLine) Init(mapInfos []*model.MapInfo) {
 			mi.Name, // showName 暂时用 name 代替
 		)
 		l.gameMapList = append(l.gameMapList, gameMap)
-		l.gameMapIdMap[mi.ID] = gameMap
+		l.gameMapIdMap[mi.MapID] = gameMap // 使用 MapID 作为 key（地图编号）
 		l.gameRoomNameMap[mi.Name] = gameMap
 	}
 }

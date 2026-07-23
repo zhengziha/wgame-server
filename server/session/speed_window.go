@@ -56,9 +56,11 @@ func (w *SpeedWindow) CountIntervalsBetween(lower, upper int) int {
 	}
 
 	count := 0
+	// 最旧元素的位置
+	oldest := (w.head - w.size + w.capacity) % w.capacity
 	for i := 1; i < w.size; i++ {
-		prevIdx := (w.head - i + w.capacity) % w.capacity
-		currIdx := (w.head - i + 1 + w.capacity) % w.capacity
+		prevIdx := (oldest + i - 1) % w.capacity
+		currIdx := (oldest + i) % w.capacity
 		interval := w.buffer[currIdx] - w.buffer[prevIdx]
 		if interval >= int64(lower) && interval < int64(upper) {
 			count++
