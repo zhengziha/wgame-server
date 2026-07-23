@@ -83,7 +83,8 @@ const (
 	tagString4    = "string4"    // 4 字节长度前缀 + GBK
 	tagBytes      = "bytes"      // 2 字节长度前缀 + 原始字节
 	tagList       = "list"       // 对象数组，可带 "list:<lentype>"
-	tagBuildField = "buildfield" // BuildFieldsNew 格式，带类型标记前缀
+	tagBuildField = "buildfield" // 完整格式: buildfield:<type>:<key>
+	tagBF         = "bf"         // 简化格式: bf:<key>（自动从 Go 类型推断）
 )
 
 // defaultListLenType 对象数组默认长度前缀类型。
@@ -149,12 +150,28 @@ func AutoRead(r *GameReader, obj interface{}) error {
 //
 // 返回值是规范的 tag 字符串（如 "int", "string2", "list:short"）。
 // 对于 list，返回值包含完整 "list:<lentype>" 形式（默认 short）。
+// 对于 BuildField tag，保留 key 部分的大小写（常量名是大小写敏感的）。
 func fieldCodecType(f reflect.StructField) (string, error) {
 	raw := f.Tag.Get("codec")
 	if raw == "-" {
 		return "", nil
 	}
-	typ := strings.ToLower(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	lower := strings.ToLower(trimmed)
+	// 检查是否为 BuildField tag（以 bf: 或 buildfield: 开头，大小写不敏感）
+	if strings.HasPrefix(lower, tagBF+":") || strings.HasPrefix(lower, tagBuildField+":") {
+		// bf:KeyName -> 保留 KeyName 大小写
+		if strings.HasPrefix(lower, tagBF+":") {
+			return tagBF + ":" + trimmed[len(tagBF)+1:], nil
+		}
+		// buildfield:int:KeyName -> 只转换 type 部分为小写，保留 KeyName
+		parts := strings.SplitN(trimmed, ":", 3)
+		if len(parts) == 3 {
+			return tagBuildField + ":" + strings.ToLower(parts[1]) + ":" + parts[2], nil
+		}
+		return lower, nil
+	}
+	typ := lower
 	if typ == "" {
 		typ = defaultCodecType(f.Type)
 		if typ == "" {
@@ -174,24 +191,74 @@ func isListTag(typ string) bool {
 }
 
 // isBuildFieldTag 判断 tag 是否为 BuildFieldsNew 格式
+// 支持两种格式:
+//   - "buildfield:<type>:<key>" 完整格式，显式指定类型
+//   - "bf:<key>" 简化格式，从 Go 类型自动推断
 func isBuildFieldTag(typ string) bool {
-	return strings.HasPrefix(typ, tagBuildField+":")
+	return strings.HasPrefix(typ, tagBuildField+":") || strings.HasPrefix(typ, tagBF+":")
 }
 
-// parseBuildFieldTag 从 "buildfield:<type>:<key>" 中提取 type 和 key
+// parseBuildFieldTag 解析 BuildField tag，支持多种格式：
+//   - "bf:<常量名>" -> 从映射表查找 key，由调用方根据 Go 类型推断 codec 类型
+//   - "bf:<数字>"   -> 直接使用数字作为 key
+//   - "buildfield:<type>:<常量名>" -> 从映射表查找 key，显式指定 codec 类型
+//   - "buildfield:<type>:<数字>"   -> 直接使用数字作为 key
+//
 // 返回 (fieldType, key, error)
+// fieldType 为空表示需要调用方根据 Go 类型自动推断
 func parseBuildFieldTag(typ string) (string, int16, error) {
+	if strings.HasPrefix(typ, tagBF+":") {
+		keyStr := strings.TrimPrefix(typ, tagBF+":")
+		key, ok := LookupBuildFieldKey(keyStr)
+		if !ok {
+			return "", 0, fmt.Errorf("codec: unknown bf key %q in tag %q (not a registered constant or valid number)", keyStr, typ)
+		}
+		return "", key, nil // 空类型标记，表示需要从 Go 类型推断
+	}
+	// 完整格式: buildfield:<type>:<key>
 	parts := strings.SplitN(typ, ":", 3)
 	if len(parts) != 3 {
 		return "", 0, fmt.Errorf("codec: invalid buildfield tag %q, expected 'buildfield:<type>:<key>'", typ)
 	}
 	fieldType := parts[1]
-	var key int16
-	n, err := fmt.Sscanf(parts[2], "%d", &key)
-	if err != nil || n != 1 {
-		return "", 0, fmt.Errorf("codec: invalid buildfield key %q in tag %q", parts[2], typ)
+	key, ok := LookupBuildFieldKey(parts[2])
+	if !ok {
+		return "", 0, fmt.Errorf("codec: unknown buildfield key %q in tag %q (not a registered constant or valid number)", parts[2], typ)
 	}
 	return fieldType, key, nil
+}
+
+// inferCodecTypeFromGo 根据 Go 类型推断 codec tag 类型
+// Java 对比：类似于根据 Java 类型自动选择写入方法（writeInt/writeLong/writeString 等）
+func inferCodecTypeFromGo(kind reflect.Kind) string {
+	switch kind {
+	case reflect.Bool:
+		return tagBool
+	case reflect.Int8:
+		return tagByte
+	case reflect.Uint8:
+		return tagUByte
+	case reflect.Int16:
+		return tagShort
+	case reflect.Uint16:
+		return tagUShort
+	case reflect.Int32:
+		return tagInt
+	case reflect.Uint32:
+		return tagUInt
+	case reflect.Int64:
+		return tagLong
+	case reflect.Uint64:
+		return tagULong
+	case reflect.Float32:
+		return tagFloat
+	case reflect.Float64:
+		return tagDouble
+	case reflect.String:
+		return tagString
+	default:
+		return ""
+	}
 }
 
 // parseListLenType 从 "list:<lentype>" 中提取 lentype；无后缀返回默认 short。
@@ -278,10 +345,20 @@ func writeField(w *GameWriter, f reflect.StructField, v reflect.Value) error {
 
 // writeBuildField 写入 BuildFieldsNew 格式的字段
 // Java格式：先写2字节key(short)，再写1字节类型标记(3=int,4=string)，最后写值
+// 支持两种 tag 格式：
+//   - "buildfield:<type>:<key>" 显式指定类型
+//   - "bf:<key>" 从 Go 类型自动推断
 func writeBuildField(w *GameWriter, tag string, f reflect.StructField, v reflect.Value) error {
 	fieldType, key, err := parseBuildFieldTag(tag)
 	if err != nil {
 		return err
+	}
+	// 简化格式: bf:<key> -> 从 Go 类型自动推断
+	if fieldType == "" {
+		fieldType = inferCodecTypeFromGo(v.Kind())
+		if fieldType == "" {
+			return fmt.Errorf("codec: cannot infer codec type for Go kind %s on field %s", v.Kind(), f.Name)
+		}
 	}
 	// 先写2字节key
 	w.WriteShort(key)
@@ -441,10 +518,20 @@ func readField(r *GameReader, f reflect.StructField, v reflect.Value) error {
 
 // readBuildField 读取 BuildFieldsNew 格式的字段
 // Java格式：先读2字节key(short)，再读1字节类型标记(3=int,4=string)，最后读值
+// 支持两种 tag 格式：
+//   - "buildfield:<type>:<key>" 显式指定类型
+//   - "bf:<key>" 从 Go 类型自动推断
 func readBuildField(r *GameReader, tag string, f reflect.StructField, v reflect.Value) error {
 	fieldType, _, err := parseBuildFieldTag(tag)
 	if err != nil {
 		return err
+	}
+	// 简化格式: bf:<key> -> 从 Go 类型自动推断
+	if fieldType == "" {
+		fieldType = inferCodecTypeFromGo(v.Kind())
+		if fieldType == "" {
+			return fmt.Errorf("codec: cannot infer codec type for Go kind %s on field %s", v.Kind(), f.Name)
+		}
 	}
 	// 先读2字节key（跳过）
 	_, err = r.ReadShort()

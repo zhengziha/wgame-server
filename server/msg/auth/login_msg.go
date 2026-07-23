@@ -77,27 +77,40 @@ func (m *MsgExistedCharList) Cmd() uint16 {
 //  17. trading_sell_buy_type (int, key=436)
 //  18. last_login_time (int) - 普通字段
 //  19. login_mac (string) - 普通字段
+//
+// BuildField tag 格式说明：
+//
+//	推荐格式: `codec:"bf:<常量名>"`  // 使用常量名，自动从 Go 类型推断 codec 类型
+//	兼容格式: `codec:"bf:<数字>"`    // 直接使用数字 key
+//	完整格式: `codec:"buildfield:<type>:<key>"` // 显式指定类型（向后兼容）
+//
+// 可用的常量名定义见: server/codec/buildfield_keys.go
+// 自动推断映射:
+//
+//	int8   -> byte,    int16 -> short,  int32 -> int,   int64 -> long
+//	uint8  -> ubyte,   uint16 -> ushort, uint32 -> uint, uint64 -> ulong
+//	string -> string,  bool -> bool
 type VoExistedChar struct {
-	Fixed17              int16  `codec:"short"`                 // 固定值17，表示后面有17个BuildFieldsNew字段
-	LeftTimeToDelete     int32  `codec:"buildfield:int:263"`    // 剩余删除时间
-	CharOnlineState      int32  `codec:"buildfield:int:435"`    // 角色在线状态
-	TradingGoodsGid      string `codec:"buildfield:string:428"` // 交易商品GID
-	Portrait             int32  `codec:"buildfield:int:86"`     // 头像
-	TradingState         int32  `codec:"buildfield:int:429"`    // 交易状态
-	TradingAppointeeName string `codec:"buildfield:string:437"` // 交易指定玩家名
-	TradingLeftTime      int32  `codec:"buildfield:int:430"`    // 交易剩余时间
-	Level                int32  `codec:"buildfield:int:31"`     // 等级
-	Polar                int32  `codec:"buildfield:int:44"`     // 门派
-	Icon                 int32  `codec:"buildfield:int:40"`     // 图标
-	Name                 string `codec:"buildfield:string:1"`   // 角色名
-	Gid                  string `codec:"buildfield:string:305"` // 全局唯一ID
-	TradingOrgPrice      int32  `codec:"buildfield:int:432"`    // 交易原价
-	TradingBuyoutPrice   int32  `codec:"buildfield:int:438"`    // 交易一口价
-	TradingCgPriceCt     int32  `codec:"buildfield:int:434"`    // 交易成功价格
-	TradingPrice         int32  `codec:"buildfield:int:431"`    // 交易价格
-	TradingSellBuyType   int32  `codec:"buildfield:int:436"`    // 交易买卖类型
-	LastLoginTime        int32  `codec:"int"`                   // 最后登录时间
-	LoginMac             string `codec:"string"`                // 登录MAC地址
+	Fixed17              int16  `codec:"short"`                   // 固定值17
+	LeftTimeToDelete     int32  `codec:"bf:LeftTimeToDelete"`     // key=263
+	CharOnlineState      int32  `codec:"bf:CharOnlineState"`      // key=435
+	TradingGoodsGid      string `codec:"bf:TradingGoodsGid"`      // key=428
+	Portrait             int32  `codec:"bf:Portrait"`             // key=86
+	TradingState         int32  `codec:"bf:TradingState"`         // key=429
+	TradingAppointeeName string `codec:"bf:TradingAppointeeName"` // key=437
+	TradingLeftTime      int32  `codec:"bf:TradingLeftTime"`      // key=430
+	Level                int32  `codec:"bf:Level"`                // key=31
+	Polar                int32  `codec:"bf:Polar"`                // key=44
+	Icon                 int32  `codec:"bf:Icon"`                 // key=40
+	Name                 string `codec:"bf:Name"`                 // key=1
+	Gid                  string `codec:"bf:Gid"`                  // key=305
+	TradingOrgPrice      int32  `codec:"bf:TradingOrgPrice"`      // key=432
+	TradingBuyoutPrice   int32  `codec:"bf:TradingBuyoutPrice"`   // key=438
+	TradingCgPriceCt     int32  `codec:"bf:TradingCgPriceCt"`     // key=434
+	TradingPrice         int32  `codec:"bf:TradingPrice"`         // key=431
+	TradingSellBuyType   int32  `codec:"bf:TradingSellBuyType"`   // key=436
+	LastLoginTime        int32  `codec:"int"`                     // 普通字段
+	LoginMac             string `codec:"string"`                  // 普通字段
 }
 
 // MsgKickOff 对应 Java MSG_KICK_OFF (cmd=53405)
