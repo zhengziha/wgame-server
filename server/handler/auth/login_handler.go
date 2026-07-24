@@ -1,9 +1,11 @@
 package auth
 
 import (
+	"fmt"
 	"time"
 	"wgame-server/comm/log"
 	"wgame-server/server/codec"
+	"wgame-server/server/constant"
 	"wgame-server/server/context"
 	"wgame-server/server/core"
 	"wgame-server/server/db"
@@ -147,26 +149,27 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 			firstChara = &chara
 		}
 		vo := auth.VoExistedChar{
-			Fixed17:              17,
-			LeftTimeToDelete:     0,
-			CharOnlineState:      chara.Online,
-			TradingGoodsGid:      "",
-			Portrait:             0,
-			TradingState:         0,
-			TradingAppointeeName: "",
-			TradingLeftTime:      0,
-			Level:                chara.Level,
-			Polar:                chara.Polar,
-			Icon:                 0,
-			Name:                 chara.Name,
-			Gid:                  chara.Gid,
-			TradingOrgPrice:      0,
-			TradingBuyoutPrice:   0,
-			TradingCgPriceCt:     0,
-			TradingPrice:         0,
-			TradingSellBuyType:   0,
-			LastLoginTime:        0,
-			LoginMac:             "",
+			ExistedCharInfo: auth.VoExistedCharInfo{
+				LeftTimeToDelete:     0,
+				CharOnlineState:      chara.Online,
+				TradingGoodsGid:      "",
+				Portrait:             0,
+				TradingState:         0,
+				TradingAppointeeName: "",
+				TradingLeftTime:      0,
+				Level:                chara.Level,
+				Polar:                chara.Polar,
+				Icon:                 0,
+				Name:                 chara.Name,
+				Gid:                  chara.Gid,
+				TradingOrgPrice:      0,
+				TradingBuyoutPrice:   0,
+				TradingCgPriceCt:     0,
+				TradingPrice:         0,
+				TradingSellBuyType:   0,
+			},
+			LastLoginTime: 0,
+			LoginMac:      "",
 		}
 		voList = append(voList, vo)
 
@@ -178,7 +181,6 @@ func CmdLoginHandler(ctx context.MyCmdContext, frame *codec.Frame, reader *codec
 
 	ctx.Write(&auth.MsgExistedCharList{
 		SeverState:     0,
-		CharCount:      int16(len(voList)),
 		Chars:          voList,
 		OpenServerTime: 0,
 		AccountOnline:  accountOnline,
@@ -258,6 +260,10 @@ func CmdLoadExistedCharHandler(ctx context.MyCmdContext, frame *codec.Frame, rea
 
 	game.CharaManagerInstance().AddChara(chara)
 
+	// 发送角色基础信息消息
+	loadCharaBases(ctx, chara)
+
+	// 进入地图
 	gameMap := core.Instance().GetGameMap(chara.Line, chara.MapId)
 	if gameMap != nil {
 		map_handler.EnterMap(ctx, chara, gameMap, chara.X, chara.Y)
@@ -269,6 +275,126 @@ func CmdLoadExistedCharHandler(ctx context.MyCmdContext, frame *codec.Frame, rea
 	log.Info("[auth] 玩家登录成功 id=%d gid=%s name=%s", chara.ID, chara.Gid, chara.Name)
 
 	return nil
+}
+
+// loadCharaBases 参考 Java 端 LoginUtil.loadCharaBases 方法
+// 发送角色基础信息相关的消息
+func loadCharaBases(ctx context.MyCmdContext, chara *game.Chara) {
+	// 1. MSG_CHAR_ALREADY_LOGIN - 通知客户端角色已登录
+	ctx.Write(&system.MsgCharAlreadyLogin{Name: chara.Name})
+
+	// 2. MSG_LOGIN_DONE - 登录完成（角色连接完成）
+	ctx.Write(&auth.MsgShowReconnectPara{
+		Name: chara.Name,
+		Para: "",
+		Gid:  chara.Gid,
+		Dist: "普通通道", // 对应 Java GameConfig.getLineName()
+	})
+
+	// 3. MSG_CS_SERVER_TYPE - 更新服务器类型
+	// 普通服务器类型为 0
+	ctx.Write(&system.MsgCsServerType{ServerType: 0})
+
+	// 4. MSG_REPLY_SERVER_TIME - 服务器时间回复
+	ctx.Write(system.NewMsgReplyServerTime())
+
+	// 5. MSG_UPDATE - 角色基础属性更新
+	updateMsg := system.NewMsgUpdate(chara.ID)
+	updateMsg.Props.Name = chara.Name
+	updateMsg.Props.Level = chara.Level
+	updateMsg.Props.Polar = chara.Polar
+	updateMsg.Props.Icon = chara.Waiguan
+	updateMsg.Props.Str = chara.Str
+	updateMsg.Props.Dex = chara.Dex
+	updateMsg.Props.Con = chara.Con
+	updateMsg.Props.Wiz = chara.Wiz
+	updateMsg.Props.Life = chara.Shengming
+	updateMsg.Props.MaxLife = chara.MaxShengming
+	updateMsg.Props.Mana = chara.Mofa
+	updateMsg.Props.MaxMana = chara.MaxMofa
+	updateMsg.Props.Metal = chara.Metal
+	updateMsg.Props.Wood = chara.Wood
+	updateMsg.Props.Water = chara.Water
+	updateMsg.Props.Fire = chara.Fire
+	updateMsg.Props.Earth = chara.Earth
+	updateMsg.Props.Cash = chara.Cash
+	updateMsg.Props.Balance = chara.Balance
+	updateMsg.Props.GoldCoin = int64(chara.GoldCoin)
+	updateMsg.Props.Nice = chara.Nice
+	updateMsg.Props.Tao = chara.Tao
+	updateMsg.Props.Online = 1
+	ctx.Write(updateMsg)
+
+	// 6. MSG_SET_SETTING - 系统设置
+	ctx.Write(system.NewMsgSetSetting())
+
+	// 7. MSG_GENERAL_NOTIFY - 御宝仙术通知
+	// Java: notify=60001(NOTIFY_TEST_YUBXS_END_TIME), para=DateTimeUtil.now() + 9999999
+	now := int32(time.Now().Unix())
+	ctx.Write(&system.MsgGeneralNotify{
+		Notify: constant.NotifyTestYbxsEndTime,
+		Para:   fmt.Sprintf("%d", now+9999999),
+	})
+
+	// 8. MSG_UPDATE - 第二次属性更新
+	ctx.Write(updateMsg)
+
+	// 9. MSG_GENERAL_NOTIFY - 邮件加载完成通知
+	// Java: notify=10012 (NOTIFY_MAIL_ALL_LOADED), para="1"
+	ctx.Write(&system.MsgGeneralNotify{
+		Notify: constant.NotifyMailAllLoaded,
+		Para:   "1",
+	})
+
+	// === loadCharaOther 部分 ===
+
+	// 10. MSG_SET_PUSH_SETTINGS - 推送设置
+	// Java: value="10011011111"
+	ctx.Write(&system.MsgSetPushSettings{Value: "10011011111"})
+
+	// 11. MSG_GENERAL_NOTIFY - iOS审核通知
+	// Java: notify=50017 (NOTIFY_IOS_REVIEW), para="0"
+	ctx.Write(&system.MsgGeneralNotify{
+		Notify: constant.NotifyIOSReview,
+		Para:   "0",
+	})
+
+	// 12. MSG_GENERAL_NOTIFY - 驱魔香通知
+	// Java: notify=20010, para=String.valueOf(chara.qumoxiang)
+	ctx.Write(&system.MsgGeneralNotify{
+		Notify: constant.NotifyQmoxiangStatus,
+		Para:   fmt.Sprintf("%d", chara.Qumoxiang),
+	})
+
+	// 13. MSG_FUZZY_IDENTITY - 身份验证
+	// Java 固定值: isBindName=1, isBindPhone=1, bindName="王老板", bindId="110101192003127055", bindPhone="130****6666"
+	ctx.Write(&system.MsgFuzzyIdentity{
+		IsBindName:  1,
+		IsBindPhone: 1,
+		BindName:    "王老板",
+		BindId:      "110101192003127055",
+		BindPhone:   "130****6666",
+	})
+
+	// 14. MSG_EXECUTE_LUA_CODE - 执行Lua代码(特殊消息)
+	ctx.Write(&system.MsgExecuteLuaCode{
+		Cookie: 0,
+		Code:   "GameMgr.checkServer = function()\nreturn 0\nend",
+		Flag:   1,
+	})
+
+	ctx.Write(&system.MsgExecuteLuaCode{
+		Cookie: 0,
+		Code:   "BarrageTalkMgr:creatBarrageLayer()",
+		Flag:   1,
+	})
+
+	// 15. MSG_GENERAL_NOTIFY - 初始化完成通知(必须在MSG_EXECUTE_LUA_CODE之后)
+	// Java: notify=39 (NOTIFY_SEND_INIT_DATA_DONE), para=""
+	ctx.Write(&system.MsgGeneralNotify{
+		Notify: constant.NotifySendInitDataDone,
+		Para:   "",
+	})
 }
 
 func init() {

@@ -5,24 +5,34 @@ import (
 	"testing"
 )
 
-// 测试用常量注册（init 函数自动注册）
+// 测试用常量（使用 TestPrefix_ 前缀，避免与正式常量冲突）
+const (
+	TestBFUserId int16 = 1001
+	TestBFLevel  int16 = 1002
+	TestBFExp    int16 = 1003
+	TestBFName   int16 = 1004
+	TestBFIsVip  int16 = 1005
+	TestBFGold   int16 = 1010
+)
+
+// 注册测试用常量
 func init() {
-	RegisterBuildFieldKey("UserId", 1)
-	RegisterBuildFieldKey("Level", 2)
-	RegisterBuildFieldKey("Exp", 3)
-	RegisterBuildFieldKey("Name", 4)
-	RegisterBuildFieldKey("IsVip", 5)
-	RegisterBuildFieldKey("Gold", 10)
+	RegisterBuildFieldKey("TestUserId", TestBFUserId)
+	RegisterBuildFieldKey("TestLevel", TestBFLevel)
+	RegisterBuildFieldKey("TestExp", TestBFExp)
+	RegisterBuildFieldKey("TestName", TestBFName)
+	RegisterBuildFieldKey("TestIsVip", TestBFIsVip)
+	RegisterBuildFieldKey("TestGold", TestBFGold)
 }
 
 // 使用常量名的简化格式测试
 type SimpleMessage struct {
-	UserId int32  `codec:"bf:UserId"` // 注册常量名
-	Level  int32  `codec:"bf:Level"`
-	Exp    int64  `codec:"bf:Exp"`
-	Name   string `codec:"bf:Name"`
-	IsVip  int8   `codec:"bf:IsVip"`
-	Gold   int64  `codec:"bf:Gold"`
+	UserId int32  `codec:"bf:TestUserId"` // 注册常量名
+	Level  int32  `codec:"bf:TestLevel"`
+	Exp    int64  `codec:"bf:TestExp"`
+	Name   string `codec:"bf:TestName"`
+	IsVip  int8   `codec:"bf:TestIsVip"`
+	Gold   int64  `codec:"bf:TestGold"`
 }
 
 // 使用数字的兼容格式测试
@@ -34,16 +44,16 @@ type NumericMessage struct {
 
 // 完整格式测试结构体（向后兼容）
 type FullMessage struct {
-	UserId int32  `codec:"buildfield:int:UserId"`
-	Level  int32  `codec:"buildfield:int:Level"`
-	Name   string `codec:"buildfield:string:Name"`
+	UserId int32  `codec:"bf:int:TestUserId"`
+	Level  int32  `codec:"bf:int:TestLevel"`
+	Name   string `codec:"bf:string:TestName"`
 }
 
 // 混合格式：完整格式 + 数字 key
 type FullNumericMessage struct {
-	UserId int32  `codec:"buildfield:int:1"`
-	Level  int32  `codec:"buildfield:int:2"`
-	Name   string `codec:"buildfield:string:4"`
+	UserId int32  `codec:"bf:int:1"`
+	Level  int32  `codec:"bf:int:2"`
+	Name   string `codec:"bf:string:4"`
 }
 
 func TestBuildFieldConstantNameFormat(t *testing.T) {
@@ -184,10 +194,10 @@ func TestLookupBuildFieldKey(t *testing.T) {
 		expectKey int16
 		expectOK  bool
 	}{
-		// 已注册的常量
-		{"UserId", 1, true},
-		{"Level", 2, true},
-		{"Name", 4, true},
+		// 已注册的测试常量（不会与正式常量冲突）
+		{"TestUserId", TestBFUserId, true},
+		{"TestLevel", TestBFLevel, true},
+		{"TestName", TestBFName, true},
 		// 数字格式（兼容）
 		{"263", 263, true},
 		{"1", 1, true},
@@ -247,18 +257,18 @@ func TestParseBuildFieldTag(t *testing.T) {
 		expectKey   int16
 		expectError bool
 	}{
-		// 常量名格式
-		{"bf:UserId", "", 1, false},
-		{"bf:Name", "", 4, false},
+		// 常量名格式（使用 Test 前缀的测试常量）
+		{"bf:TestUserId", "", TestBFUserId, false},
+		{"bf:TestName", "", TestBFName, false},
 		// 数字格式（兼容）
 		{"bf:263", "", 263, false},
 		{"bf:1", "", 1, false},
 		// 完整格式 + 常量名
-		{"buildfield:int:UserId", "int", 1, false},
-		{"buildfield:string:Name", "string", 4, false},
+		{"bf:int:TestUserId", "int", TestBFUserId, false},
+		{"bf:string:TestName", "string", TestBFName, false},
 		// 完整格式 + 数字（兼容）
-		{"buildfield:int:263", "int", 263, false},
-		{"buildfield:long:100", "long", 100, false},
+		{"bf:int:263", "int", 263, false},
+		{"bf:long:100", "long", 100, false},
 		// 错误格式
 		{"invalid", "", 0, true},
 		{"bf:NonExistent", "", 0, true}, // 未注册的常量名

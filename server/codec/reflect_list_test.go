@@ -316,3 +316,97 @@ func TestListLenOverflow(t *testing.T) {
 		t.Fatal("expected overflow error for byte-length list with 256 items")
 	}
 }
+
+// TestBuildFieldAutoCount 验证 buildfield 容器自动写入字段数量前缀。
+// 新设计：BuildField 字段必须封装在独立结构体中，用 codec:"buildfields" 标记，
+// 序列化时自动写 short(字段数) + 展开 bf 字段。
+func TestBuildFieldAutoCount(t *testing.T) {
+	// BuildField 容器：只含 bf 字段
+	type VoExistedCharInfo struct {
+		LeftTimeToDelete int32  `codec:"bf:LeftTimeToDelete"`
+		Level            int32  `codec:"bf:Level"`
+		Name             string `codec:"bf:Name"`
+		Gid              string `codec:"bf:Gid"`
+	}
+
+	// 外层：buildfield 容器 + 普通字段
+	type VoExistedChar struct {
+		Info          VoExistedCharInfo `codec:"buildfields"` // BuildField 容器
+		LastLoginTime int32             `codec:"int"`         // 普通字段
+		LoginMac      string            `codec:"string"`      // 普通字段
+	}
+
+	src := VoExistedChar{
+		Info: VoExistedCharInfo{
+			LeftTimeToDelete: 100,
+			Level:            30,
+			Name:             "测试角色",
+			Gid:              "test_gid_001",
+		},
+		LastLoginTime: 1700000000,
+		LoginMac:      "00:11:22:33:44:55",
+	}
+
+	// 使用自动序列化
+	w := NewGameWriter(128)
+	if err := AutoWrite(w, &src); err != nil {
+		t.Fatalf("AutoWrite failed: %v", err)
+	}
+
+	// 验证字节序列：先读 BuildField 数量（应为 4）
+	r := NewGameReader(w.Bytes())
+	bfCount, err := r.ReadShort()
+	if err != nil {
+		t.Fatalf("ReadShort failed: %v", err)
+	}
+	if bfCount != 4 {
+		t.Fatalf("expected 4 buildfield fields, got %d", bfCount)
+	}
+
+	// 验证往返读写字段正确
+	dst := VoExistedChar{}
+	if err := AutoRead(NewGameReader(w.Bytes()), &dst); err != nil {
+		t.Fatalf("AutoRead failed: %v", err)
+	}
+
+	if dst != src {
+		t.Fatalf("mismatch: want=%+v got=%+v", src, dst)
+	}
+}
+
+// TestBuildFieldAutoCountZero 验证没有 BuildField 字段时不写入数量前缀。
+func TestBuildFieldAutoCountZero(t *testing.T) {
+	type SimpleMsg struct {
+		IntVal    int32  `codec:"int"`
+		StringVal string `codec:"string"`
+	}
+
+	src := SimpleMsg{
+		IntVal:    42,
+		StringVal: "hello",
+	}
+
+	w := NewGameWriter(64)
+	if err := AutoWrite(w, &src); err != nil {
+		t.Fatalf("AutoWrite failed: %v", err)
+	}
+
+	// 验证没有 BuildField 数量前缀，直接是普通字段
+	r := NewGameReader(w.Bytes())
+	intVal, err := r.ReadInt()
+	if err != nil {
+		t.Fatalf("ReadInt failed: %v", err)
+	}
+	if intVal != 42 {
+		t.Fatalf("expected 42, got %d", intVal)
+	}
+
+	dst := SimpleMsg{}
+	if err := AutoRead(NewGameReader(w.Bytes()), &dst); err != nil {
+		t.Fatalf("AutoRead failed: %v", err)
+	}
+
+	if dst != src {
+		t.Fatalf("mismatch: want=%+v got=%+v", src, dst)
+	}
+}

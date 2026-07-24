@@ -195,21 +195,27 @@ func TestAutoReadErrors(t *testing.T) {
 	}
 }
 
-// buildFieldStruct 用于测试 buildfield 标签
-type buildFieldStruct struct {
-	Fix17         int16  `codec:"short"`                 // 固定值17
-	IntField      int32  `codec:"buildfield:int:263"`    // int类型buildfield
-	StringField   string `codec:"buildfield:string:428"` // string类型buildfield
-	LastLoginTime int32  `codec:"int"`                   // 普通int字段
+// bfContainer 用于测试 buildfield 容器标签：只含 bf 字段
+type bfContainer struct {
+	IntField    int32  `codec:"bf:int:263"`    // int类型buildfield
+	StringField string `codec:"bf:string:428"` // string类型buildfield
 }
 
-// TestBuildFieldWrite 验证 buildfield 写入格式是否正确
-// Java格式：先写2字节key(short)，再写1字节类型标记(3=int,4=string)，最后写值
+// bfOuter 用于测试 buildfield 容器在外层结构体中的使用
+type bfOuter struct {
+	Container     bfContainer `codec:"buildfields"` // BuildField 容器
+	LastLoginTime int32       `codec:"int"`         // 普通int字段
+}
+
+// TestBuildFieldWrite 验证 buildfield 容器写入格式是否正确
+// 新设计：BuildField 字段封装在独立结构体中，用 codec:"buildfields" 标记，
+// 序列化时写 short(字段数) + 展开 bf 字段，再写普通字段。
 func TestBuildFieldWrite(t *testing.T) {
-	m := &buildFieldStruct{
-		Fix17:         17,
-		IntField:      12345,
-		StringField:   "test_string",
+	m := &bfOuter{
+		Container: bfContainer{
+			IntField:    12345,
+			StringField: "test_string",
+		},
 		LastLoginTime: 67890,
 	}
 
@@ -221,15 +227,15 @@ func TestBuildFieldWrite(t *testing.T) {
 	got := w.Bytes()
 
 	// 预期字节序列：
-	// Fix17: 17 as short = [0, 17]
+	// BuildField数量: 2 as short = [0, 2]
 	// IntField: key=263 as short = [1, 7], type=3 (int) = [3], value=12345 as int = [0, 0, 48, 57]
 	// StringField: key=428 as short = [1, 172], type=4 (string) = [4], value="test_string" = len=11 + "test_string"
-	// LastLoginTime: 67890 as int = [0, 0, 167, 42]
+	// LastLoginTime: 67890 as int = [0, 1, 9, 50]
 
-	// 检查Fix17
-	expectedFix17 := []byte{0, 17}
-	if !bytes.Equal(got[0:2], expectedFix17) {
-		t.Errorf("Fix17 mismatch: want % x, got % x", expectedFix17, got[0:2])
+	// 检查BuildField数量
+	expectedBFCount := []byte{0, 2} // 2个BuildField字段
+	if !bytes.Equal(got[0:2], expectedBFCount) {
+		t.Errorf("BuildField count mismatch: want % x, got % x", expectedBFCount, got[0:2])
 	}
 
 	// 检查IntField的key
@@ -277,12 +283,13 @@ func TestBuildFieldWrite(t *testing.T) {
 	t.Logf("buildfield write test passed, total bytes: %d", len(got))
 }
 
-// TestBuildFieldRead 验证 buildfield 读取的往返一致性
+// TestBuildFieldRead 验证 buildfield 容器读取的往返一致性
 func TestBuildFieldRead(t *testing.T) {
-	src := &buildFieldStruct{
-		Fix17:         17,
-		IntField:      54321,
-		StringField:   "hello",
+	src := &bfOuter{
+		Container: bfContainer{
+			IntField:    54321,
+			StringField: "hello",
+		},
 		LastLoginTime: 12345,
 	}
 
@@ -291,24 +298,90 @@ func TestBuildFieldRead(t *testing.T) {
 		t.Fatalf("AutoWrite failed: %v", err)
 	}
 
-	dst := &buildFieldStruct{}
+	dst := &bfOuter{}
 	r := NewGameReader(w.Bytes())
 	if err := AutoRead(r, dst); err != nil {
 		t.Fatalf("AutoRead failed: %v", err)
 	}
 
-	if dst.Fix17 != src.Fix17 {
-		t.Errorf("Fix17 mismatch: want %d, got %d", src.Fix17, dst.Fix17)
+	if dst.Container.IntField != src.Container.IntField {
+		t.Errorf("IntField mismatch: want %d, got %d", src.Container.IntField, dst.Container.IntField)
 	}
-	if dst.IntField != src.IntField {
-		t.Errorf("IntField mismatch: want %d, got %d", src.IntField, dst.IntField)
-	}
-	if dst.StringField != src.StringField {
-		t.Errorf("StringField mismatch: want '%s', got '%s'", src.StringField, dst.StringField)
+	if dst.Container.StringField != src.Container.StringField {
+		t.Errorf("StringField mismatch: want '%s', got '%s'", src.Container.StringField, dst.Container.StringField)
 	}
 	if dst.LastLoginTime != src.LastLoginTime {
 		t.Errorf("LastLoginTime mismatch: want %d, got %d", src.LastLoginTime, dst.LastLoginTime)
 	}
 
 	t.Logf("buildfield read/write round-trip test passed")
+}
+
+// nestedBFInfo 模拟 VoExistedCharInfo：只含 bf 字段
+type nestedBFInfo struct {
+	LeftTimeToDelete int32  `codec:"bf:LeftTimeToDelete"` // key=263
+	Level            int32  `codec:"bf:Level"`            // key=31
+	Name             string `codec:"bf:Name"`             // key=1
+}
+
+// nestedBFOuter 模拟 VoExistedChar：buildfield 容器 + 普通字段
+type nestedBFOuter struct {
+	Info          nestedBFInfo `codec:"buildfield"` // BuildField 容器
+	LastLoginTime int32        `codec:"int"`        // 普通字段
+	LoginMac      string       `codec:"string"`     // 普通字段
+}
+
+// TestNestedStructBuildField 验证 buildfield 容器的编解码。
+// 期望的字节序列：
+//   - Info 容器写入：short(3 个 bf 字段) + 3 个 buildfield 条目
+//   - LastLoginTime (int)
+//   - LoginMac (string)
+func TestNestedStructBuildField(t *testing.T) {
+	src := &nestedBFOuter{
+		Info: nestedBFInfo{
+			LeftTimeToDelete: 100,
+			Level:            30,
+			Name:             "测试角色",
+		},
+		LastLoginTime: 1700000000,
+		LoginMac:      "00:11:22:33:44:55",
+	}
+
+	w := NewGameWriter(128)
+	if err := AutoWrite(w, src); err != nil {
+		t.Fatalf("AutoWrite failed: %v", err)
+	}
+
+	got := w.Bytes()
+
+	// 首字节应该是嵌套结构体的 BuildField 数量 = 3
+	bfCount := int16(got[0])<<8 | int16(got[1])
+	if bfCount != 3 {
+		t.Fatalf("expected nested BuildField count 3, got %d", bfCount)
+	}
+
+	// 往返读回验证
+	dst := &nestedBFOuter{}
+	r := NewGameReader(got)
+	if err := AutoRead(r, dst); err != nil {
+		t.Fatalf("AutoRead failed: %v", err)
+	}
+
+	if dst.Info.LeftTimeToDelete != src.Info.LeftTimeToDelete {
+		t.Errorf("LeftTimeToDelete: want %d, got %d", src.Info.LeftTimeToDelete, dst.Info.LeftTimeToDelete)
+	}
+	if dst.Info.Level != src.Info.Level {
+		t.Errorf("Level: want %d, got %d", src.Info.Level, dst.Info.Level)
+	}
+	if dst.Info.Name != src.Info.Name {
+		t.Errorf("Name: want %q, got %q", src.Info.Name, dst.Info.Name)
+	}
+	if dst.LastLoginTime != src.LastLoginTime {
+		t.Errorf("LastLoginTime: want %d, got %d", src.LastLoginTime, dst.LastLoginTime)
+	}
+	if dst.LoginMac != src.LoginMac {
+		t.Errorf("LoginMac: want %q, got %q", src.LoginMac, dst.LoginMac)
+	}
+
+	t.Logf("nested struct buildfield test passed, total bytes: %d", len(got))
 }

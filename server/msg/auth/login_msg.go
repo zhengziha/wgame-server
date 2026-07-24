@@ -41,10 +41,10 @@ func (m *MsgAuth) Cmd() uint16 {
 // MsgExistedCharList 对应 Java MSG_EXISTED_CHAR_LIST (cmd=61537)
 // 返回账号下的角色列表
 // Java写入顺序：severState(short), listSize(short), chars(list), openServerTime(int), account_online(byte), lineName(String)
+// 其中 listSize 由 list:short 的长度前缀自动写入，无需单独定义 CharCount 字段。
 type MsgExistedCharList struct {
 	SeverState     int16           `codec:"short"`      // 服务器状态
-	CharCount      int16           `codec:"short"`      // 角色数量
-	Chars          []VoExistedChar `codec:"list:short"` // 角色列表
+	Chars          []VoExistedChar `codec:"list:short"` // 角色列表（长度前缀即 listSize）
 	OpenServerTime int32           `codec:"int"`        // 开服时间
 	AccountOnline  int8            `codec:"byte"`       // 账号是否在线
 	LineName       string          `codec:"string"`     // 线路名称
@@ -54,10 +54,17 @@ func (m *MsgExistedCharList) Cmd() uint16 {
 	return 61537
 }
 
-// VoExistedChar 对应 Java Vo_61537_0
-// 单个角色信息
-// Java中使用BuildFieldsNew按顺序写入各个字段
-// 字段顺序（对照Java MSG_EXISTED_CHAR_LIST.writeO）：
+// VoExistedChar 对应 Java Vo_61537_0，单个角色信息。
+// 第一个字段 ExistedCharInfo 是 BuildField 容器（codec:"buildfields"），
+// 序列化时会先写 short(字段数=17) + 17 个 bf 字段，再写后面的普通字段。
+type VoExistedChar struct {
+	ExistedCharInfo VoExistedCharInfo `codec:"buildfields"` // BuildField 容器
+	LastLoginTime   int32             `codec:"int"`         // 普通字段
+	LoginMac        string            `codec:"string"`      // 普通字段
+}
+
+// VoExistedCharInfo 封装 VoExistedChar 的 17 个 BuildField 动态字段。
+// Java中使用BuildFieldsNew按顺序写入，字段顺序（对照Java MSG_EXISTED_CHAR_LIST.writeO）：
 //  1. left_time_to_delete (int, key=263)
 //  2. char_online_state (int, key=435)
 //  3. trading_goods_gid (string, key=428)
@@ -75,23 +82,7 @@ func (m *MsgExistedCharList) Cmd() uint16 {
 //  15. trading_cg_price_ct (int, key=434)
 //  16. trading_price (int, key=431)
 //  17. trading_sell_buy_type (int, key=436)
-//  18. last_login_time (int) - 普通字段
-//  19. login_mac (string) - 普通字段
-//
-// BuildField tag 格式说明：
-//
-//	推荐格式: `codec:"bf:<常量名>"`  // 使用常量名，自动从 Go 类型推断 codec 类型
-//	兼容格式: `codec:"bf:<数字>"`    // 直接使用数字 key
-//	完整格式: `codec:"buildfield:<type>:<key>"` // 显式指定类型（向后兼容）
-//
-// 可用的常量名定义见: server/codec/buildfield_keys.go
-// 自动推断映射:
-//
-//	int8   -> byte,    int16 -> short,  int32 -> int,   int64 -> long
-//	uint8  -> ubyte,   uint16 -> ushort, uint32 -> uint, uint64 -> ulong
-//	string -> string,  bool -> bool
-type VoExistedChar struct {
-	Fixed17              int16  `codec:"short"`                   // 固定值17
+type VoExistedCharInfo struct {
 	LeftTimeToDelete     int32  `codec:"bf:LeftTimeToDelete"`     // key=263
 	CharOnlineState      int32  `codec:"bf:CharOnlineState"`      // key=435
 	TradingGoodsGid      string `codec:"bf:TradingGoodsGid"`      // key=428
@@ -109,8 +100,6 @@ type VoExistedChar struct {
 	TradingCgPriceCt     int32  `codec:"bf:TradingCgPriceCt"`     // key=434
 	TradingPrice         int32  `codec:"bf:TradingPrice"`         // key=431
 	TradingSellBuyType   int32  `codec:"bf:TradingSellBuyType"`   // key=436
-	LastLoginTime        int32  `codec:"int"`                     // 普通字段
-	LoginMac             string `codec:"string"`                  // 普通字段
 }
 
 // MsgKickOff 对应 Java MSG_KICK_OFF (cmd=53405)

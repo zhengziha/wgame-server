@@ -67,24 +67,25 @@ import (
 
 // codecTag 支持的编码类型常量（小写形式）
 const (
-	tagBool       = "bool"
-	tagByte       = "byte"       // 有符号 1 字节，对应 Java writeByte/readByte
-	tagUByte      = "ubyte"      // 无符号 1 字节，对应 Java writeUnsignedByte
-	tagShort      = "short"      // 有符号 2 字节
-	tagUShort     = "ushort"     // 无符号 2 字节
-	tagInt        = "int"        // 有符号 4 字节
-	tagUInt       = "uint"       // 无符号 4 字节
-	tagLong       = "long"       // 有符号 8 字节
-	tagULong      = "ulong"      // 无符号 8 字节
-	tagFloat      = "float"      // 4 字节 IEEE754
-	tagDouble     = "double"     // 8 字节 IEEE754
-	tagString     = "string"     // 1 字节长度前缀 + GBK
-	tagString2    = "string2"    // 2 字节长度前缀 + GBK
-	tagString4    = "string4"    // 4 字节长度前缀 + GBK
-	tagBytes      = "bytes"      // 2 字节长度前缀 + 原始字节
-	tagList       = "list"       // 对象数组，可带 "list:<lentype>"
-	tagBuildField = "buildfield" // 完整格式: buildfield:<type>:<key>
-	tagBF         = "bf"         // 简化格式: bf:<key>（自动从 Go 类型推断）
+	tagBool        = "bool"
+	tagByte        = "byte"        // 有符号 1 字节，对应 Java writeByte/readByte
+	tagUByte       = "ubyte"       // 无符号 1 字节，对应 Java writeUnsignedByte
+	tagShort       = "short"       // 有符号 2 字节
+	tagUShort      = "ushort"      // 无符号 2 字节
+	tagInt         = "int"         // 有符号 4 字节
+	tagUInt        = "uint"        // 无符号 4 字节
+	tagLong        = "long"        // 有符号 8 字节
+	tagULong       = "ulong"       // 无符号 8 字节
+	tagFloat       = "float"       // 4 字节 IEEE754
+	tagDouble      = "double"      // 8 字节 IEEE754
+	tagString      = "string"      // 1 字节长度前缀 + GBK
+	tagString2     = "string2"     // 2 字节长度前缀 + GBK
+	tagString4     = "string4"     // 4 字节长度前缀 + GBK
+	tagBytes       = "bytes"       // 2 字节长度前缀 + 原始字节
+	tagList        = "list"        // 对象数组，可带 "list:<lentype>"
+	tagBuildFields = "buildfields" // BuildField 容器标记（struct 字段，内部全是 bf 字段）
+	tagBF          = "bf"          // 单个 BuildField 字段，格式: bf:<key> 或 bf:<type>:<key>
+	tagStruct      = "struct"      // 嵌套结构体，递归调用 AutoWrite/AutoRead
 )
 
 // defaultListLenType 对象数组默认长度前缀类型。
@@ -92,93 +93,177 @@ const (
 const defaultListLenType = tagShort
 
 // AutoWrite 通过反射将 obj 的导出字段按声明顺序写入 w。
+//
+// 编码规则（严格按字段定义顺序，不做分类/重排）：
+//   - 普通 int/string/byte 等字段：按 tag 直接写
+//   - list 字段：写长度前缀 + 依次写元素
+//   - bf:<key> / bf:<type>:<key> 单字段：按 key/type/value 写
+//   - buildfields 容器字段（struct 标记 codec:"buildfields"）：先写 short(字段数)，
+//     再按顺序展开内部字段（约定内部只含 bf 字段，数量编译期固定，无需运行时统计）
+//   - 普通 struct 字段（无 codec 标签）：递归调用 AutoWrite
+//
+// 设计说明：BuildField 必须封装在独立子结构体中（如 VoExistedCharInfo），
+// 用 codec:"buildfields" 显式标记。这样外层结构体按声明顺序处理时，
+// 遇到该字段就知道要写数量前缀并展开，字节顺序与 Java 端完全一致。
+//
 // obj 可以是 struct 或指向 struct 的指针；遇到非结构体返回错误。
 // 跳过未导出字段与带 `codec:"-"` 的字段。
 func AutoWrite(w *GameWriter, obj interface{}) error {
 	v := reflect.ValueOf(obj)
+
 	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return errors.New("codec.AutoWrite: nil pointer")
 		}
 		v = v.Elem()
 	}
+
 	if v.Kind() != reflect.Struct {
 		return fmt.Errorf("codec.AutoWrite: expected struct, got %s", v.Kind())
 	}
+
 	t := v.Type()
+
+	// 严格按字段定义顺序写入各字段
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		if !f.IsExported() {
 			continue
 		}
+		typ, err := fieldCodecType(f)
+		if err != nil {
+			return err
+		}
+		if typ == "" {
+			continue // codec:"-" 表示跳过该字段
+		}
 		if err := writeField(w, f, v.Field(i)); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
+// countExportedCodecFields 统计结构体 t 中参与编解码的字段数量
+// （导出且非 codec:"-"）。用于 buildfield 容器写入数量前缀。
+func countExportedCodecFields(t reflect.Type) int {
+	count := 0
+	for i := 0; i < t.NumField(); i++ {
+		f := t.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		typ, err := fieldCodecType(f)
+		if err != nil || typ == "" {
+			continue
+		}
+		count++
+	}
+	return count
+}
+
 // AutoRead 通过反射按声明顺序从 r 读取并填充 obj（必须为可寻址的 struct 或其指针）。
+//
+// 解码规则（严格按字段定义顺序，与 AutoWrite 对应）：
+//   - 普通 int/string/byte 等字段：按 tag 直接读
+//   - list 字段：读长度前缀 + 依次读元素
+//   - bf:<key> / bf:<type>:<key> 单字段：按 key/type/value 读
+//   - buildfields 容器字段（struct 标记 codec:"buildfields"）：先读 short(字段数) 校验，
+//     再按顺序读内部字段
+//   - 普通 struct 字段（无 codec 标签）：递归调用 AutoRead
 func AutoRead(r *GameReader, obj interface{}) error {
 	v := reflect.ValueOf(obj)
+
 	for v.Kind() == reflect.Pointer {
 		if v.IsNil() {
 			return errors.New("codec.AutoRead: nil pointer")
 		}
 		v = v.Elem()
 	}
+
 	if v.Kind() != reflect.Struct {
 		return fmt.Errorf("codec.AutoRead: expected struct, got %s", v.Kind())
 	}
+
+	// 只有传入指针（如 &msg），解引用后的 v 才是可寻址的，才能修改字段值
 	if !v.CanAddr() {
 		return errors.New("codec.AutoRead: value not addressable; pass a pointer to struct")
 	}
+
 	t := v.Type()
+
+	// 严格按字段定义顺序读取各字段
 	for i := 0; i < t.NumField(); i++ {
 		f := t.Field(i)
 		if !f.IsExported() {
 			continue
 		}
+		typ, err := fieldCodecType(f)
+		if err != nil {
+			return err
+		}
+		if typ == "" {
+			continue // codec:"-" 跳过
+		}
 		if err := readField(r, f, v.Field(i)); err != nil {
 			return err
 		}
 	}
+
 	return nil
 }
 
-// fieldCodecType 解析字段 tag；返回空串表示该字段应被跳过（codec:"-").
+// fieldCodecType 解析字段的 codec tag，确定编码类型。
+// 返回空串表示该字段应被跳过（codec:"-"）。
+//
+// 【反射知识点 - StructField】
+// - f.Tag: 获取字段的 tag（如 `codec:"int" json:"name"`）
+// - f.Tag.Get("codec"): 获取 codec tag 的值
+// - f.Type: 获取字段的 Go 类型
 //
 // 返回值是规范的 tag 字符串（如 "int", "string2", "list:short"）。
-// 对于 list，返回值包含完整 "list:<lentype>" 形式（默认 short）。
-// 对于 BuildField tag，保留 key 部分的大小写（常量名是大小写敏感的）。
 func fieldCodecType(f reflect.StructField) (string, error) {
+	// 获取 codec tag 的原始值
 	raw := f.Tag.Get("codec")
 	if raw == "-" {
-		return "", nil
+		return "", nil // "-" 表示跳过该字段
 	}
+
+	// 去除空格并转为小写（tag 不区分大小写）
 	trimmed := strings.TrimSpace(raw)
 	lower := strings.ToLower(trimmed)
-	// 检查是否为 BuildField tag（以 bf: 或 buildfield: 开头，大小写不敏感）
-	if strings.HasPrefix(lower, tagBF+":") || strings.HasPrefix(lower, tagBuildField+":") {
-		// bf:KeyName -> 保留 KeyName 大小写
-		if strings.HasPrefix(lower, tagBF+":") {
-			return tagBF + ":" + trimmed[len(tagBF)+1:], nil
-		}
-		// buildfield:int:KeyName -> 只转换 type 部分为小写，保留 KeyName
-		parts := strings.SplitN(trimmed, ":", 3)
-		if len(parts) == 3 {
-			return tagBuildField + ":" + strings.ToLower(parts[1]) + ":" + parts[2], nil
-		}
-		return lower, nil
+
+	// 检查是否为 BuildField tag
+	// 两种形式：
+	//   - "buildfields"     -> BuildField 容器标记（字段本身是 struct，内部全是 bf 字段）
+	//   - "bf:<key>" 或 "bf:<type>:<key>" -> 单个 BuildField 字段
+	if lower == tagBuildFields {
+		return tagBuildFields, nil // 容器标记
 	}
+	if strings.HasPrefix(lower, tagBF+":") {
+		// 保留 trimmed 的大小写，但把 type 部分转小写，保留 key 大小写
+		rest := trimmed[len(tagBF)+1:]
+		parts := strings.SplitN(rest, ":", 2)
+		if len(parts) == 2 {
+			// bf:<type>:<key> -> type 小写，key 保留
+			return tagBF + ":" + strings.ToLower(parts[0]) + ":" + parts[1], nil
+		}
+		// bf:<key> -> 保留 key 大小写（常量名大小写敏感）
+		return tagBF + ":" + rest, nil
+	}
+
+	// 普通 tag 类型
 	typ := lower
 	if typ == "" {
+		// 如果没有指定 tag，根据 Go 类型推断编码类型
 		typ = defaultCodecType(f.Type)
 		if typ == "" {
 			return "", fmt.Errorf("codec: field %s has unsupported type %s; set an explicit `codec:\"...\"` tag", f.Name, f.Type)
 		}
 	}
-	// "list" 单独作为 tag 时补齐默认长度类型，统一后续解析
+
+	// "list" 单独作为 tag 时补齐默认长度类型
 	if typ == tagList {
 		typ = tagList + ":" + defaultListLenType
 	}
@@ -190,42 +275,38 @@ func isListTag(typ string) bool {
 	return typ == tagList || strings.HasPrefix(typ, tagList+":")
 }
 
-// isBuildFieldTag 判断 tag 是否为 BuildFieldsNew 格式
-// 支持两种格式:
-//   - "buildfield:<type>:<key>" 完整格式，显式指定类型
-//   - "bf:<key>" 简化格式，从 Go 类型自动推断
+// isBuildFieldTag 判断 tag 是否为单个 BuildField 字段
+// 支持格式: "bf:<key>" 或 "bf:<type>:<key>"
 func isBuildFieldTag(typ string) bool {
-	return strings.HasPrefix(typ, tagBuildField+":") || strings.HasPrefix(typ, tagBF+":")
+	return strings.HasPrefix(typ, tagBF+":")
 }
 
-// parseBuildFieldTag 解析 BuildField tag，支持多种格式：
-//   - "bf:<常量名>" -> 从映射表查找 key，由调用方根据 Go 类型推断 codec 类型
-//   - "bf:<数字>"   -> 直接使用数字作为 key
-//   - "buildfield:<type>:<常量名>" -> 从映射表查找 key，显式指定 codec 类型
-//   - "buildfield:<type>:<数字>"   -> 直接使用数字作为 key
+// parseBuildFieldTag 解析单个 BuildField 字段的 tag。
+// 支持格式：
+//   - "bf:<常量名>" -> 查映射表得 key，由调用方根据 Go 类型推断 codec 类型
+//   - "bf:<数字>"   -> 直接用数字作为 key
+//   - "bf:<type>:<常量名>" -> 显式指定 codec 类型 + 查映射表得 key
+//   - "bf:<type>:<数字>"   -> 显式指定 codec 类型 + 直接用数字作为 key
 //
-// 返回 (fieldType, key, error)
-// fieldType 为空表示需要调用方根据 Go 类型自动推断
+// 返回 (fieldType, key, error)，fieldType 为空表示需要调用方推断。
 func parseBuildFieldTag(typ string) (string, int16, error) {
-	if strings.HasPrefix(typ, tagBF+":") {
-		keyStr := strings.TrimPrefix(typ, tagBF+":")
-		key, ok := LookupBuildFieldKey(keyStr)
+	rest := strings.TrimPrefix(typ, tagBF+":")
+	parts := strings.SplitN(rest, ":", 2)
+	if len(parts) == 2 {
+		// bf:<type>:<key>
+		fieldType := parts[0]
+		key, ok := LookupBuildFieldKey(parts[1])
 		if !ok {
-			return "", 0, fmt.Errorf("codec: unknown bf key %q in tag %q (not a registered constant or valid number)", keyStr, typ)
+			return "", 0, fmt.Errorf("codec: unknown bf key %q in tag %q (not a registered constant or valid number)", parts[1], typ)
 		}
-		return "", key, nil // 空类型标记，表示需要从 Go 类型推断
+		return fieldType, key, nil
 	}
-	// 完整格式: buildfield:<type>:<key>
-	parts := strings.SplitN(typ, ":", 3)
-	if len(parts) != 3 {
-		return "", 0, fmt.Errorf("codec: invalid buildfield tag %q, expected 'buildfield:<type>:<key>'", typ)
-	}
-	fieldType := parts[1]
-	key, ok := LookupBuildFieldKey(parts[2])
+	// bf:<key>
+	key, ok := LookupBuildFieldKey(parts[0])
 	if !ok {
-		return "", 0, fmt.Errorf("codec: unknown buildfield key %q in tag %q (not a registered constant or valid number)", parts[2], typ)
+		return "", 0, fmt.Errorf("codec: unknown bf key %q in tag %q (not a registered constant or valid number)", parts[0], typ)
 	}
-	return fieldType, key, nil
+	return "", key, nil // 空类型标记，表示需要从 Go 类型推断
 }
 
 // inferCodecTypeFromGo 根据 Go 类型推断 codec tag 类型
@@ -292,25 +373,50 @@ func setIntVal(v reflect.Value, n int64) {
 	}
 }
 
+// writeField 根据字段的 tag 类型写入单个字段。
+//
+// 【反射知识点 - 读写字段值】
+// - v.Bool(): 获取 bool 字段的值
+// - v.Int(): 获取有符号整数字段的值
+// - v.Uint(): 获取无符号整数字段的值
+// - v.Float(): 获取浮点数字段的值
+// - v.String(): 获取字符串字段的值
+// - v.Bytes(): 获取 []byte 字段的值
+//
+// 注意：调用这些方法时，必须确保字段类型匹配，否则会 panic
 func writeField(w *GameWriter, f reflect.StructField, v reflect.Value) error {
+	// 解析字段的编码类型
 	typ, err := fieldCodecType(f)
 	if err != nil {
 		return err
 	}
 	if typ == "" {
-		return nil
+		return nil // 空类型表示跳过
 	}
+
+	// 处理特殊类型：列表、BuildField 容器、BuildField 单字段、嵌套结构体
 	if isListTag(typ) {
-		return writeList(w, f, v, parseListLenType(typ))
+		lenType := parseListLenType(typ)
+		return writeList(w, f, v, lenType)
+	}
+	if typ == tagBuildFields {
+		// BuildField 容器：写 short(字段数) + 展开内部 bf 字段
+		return writeBuildFieldContainer(w, f, v)
 	}
 	if isBuildFieldTag(typ) {
 		return writeBuildField(w, typ, f, v)
 	}
+	if typ == tagStruct {
+		// 普通嵌套结构体：递归调用 AutoWrite 处理其内部字段
+		return AutoWrite(w, v.Interface())
+	}
+
+	// 处理普通类型：根据 tag 类型选择写入方法
 	switch typ {
 	case tagBool:
-		w.WriteBoolean(v.Bool())
+		w.WriteBoolean(v.Bool()) // v.Bool() 获取 bool 值
 	case tagByte:
-		w.WriteByte(int8(intVal(v)))
+		w.WriteByte(int8(intVal(v))) // intVal 统一处理有/无符号整数
 	case tagUByte:
 		w.WriteUByte(int(intVal(v)))
 	case tagShort:
@@ -326,19 +432,59 @@ func writeField(w *GameWriter, f reflect.StructField, v reflect.Value) error {
 	case tagULong:
 		w.WriteLong(int64(uint64(intVal(v))))
 	case tagFloat:
-		w.WriteFloat(float32(v.Float()))
+		w.WriteFloat(float32(v.Float())) // v.Float() 获取浮点值
 	case tagDouble:
 		w.WriteDouble(v.Float())
 	case tagString:
-		w.WriteString(v.String())
+		w.WriteString(v.String()) // v.String() 获取字符串值
 	case tagString2:
 		w.WriteString2(v.String())
 	case tagString4:
 		w.WriteString4(v.String())
 	case tagBytes:
-		w.WriteBytes(v.Bytes())
+		w.WriteBytes(v.Bytes()) // v.Bytes() 获取 []byte 值
 	default:
 		return fmt.Errorf("codec: unknown codec tag %q on field %s", typ, f.Name)
+	}
+	return nil
+}
+
+// writeBuildFieldContainer 写入 BuildField 容器（字段标记 codec:"buildfields"）。
+//
+// 对应 Java 端 writeShort(count) + 连续 BuildFieldsNew 写入。
+// 容器字段必须是 struct（或指向 struct 的指针），内部约定只含 bf:<key> 或 bf:<type>:<key> 字段。
+// 字段数量由结构体定义决定（编译期固定），直接统计导出且非跳过的字段数，无需运行时判断。
+func writeBuildFieldContainer(w *GameWriter, f reflect.StructField, v reflect.Value) error {
+	// 解引用指针
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			return fmt.Errorf("codec: buildfield container %s is nil pointer", f.Name)
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return fmt.Errorf("codec: buildfield container %s must be struct, got %s", f.Name, v.Kind())
+	}
+
+	t := v.Type()
+	// 先写字段数量
+	w.WriteShort(int16(countExportedCodecFields(t)))
+	// 按顺序展开内部字段
+	for i := 0; i < t.NumField(); i++ {
+		inner := t.Field(i)
+		if !inner.IsExported() {
+			continue
+		}
+		innerTyp, err := fieldCodecType(inner)
+		if err != nil {
+			return err
+		}
+		if innerTyp == "" {
+			continue
+		}
+		if err := writeField(w, inner, v.Field(i)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -414,10 +560,23 @@ func readField(r *GameReader, f reflect.StructField, v reflect.Value) error {
 		return nil
 	}
 	if isListTag(typ) {
-		return readList(r, f, v, parseListLenType(typ))
+		lenType := parseListLenType(typ)
+		return readList(r, f, v, lenType)
+	}
+	if typ == tagBuildFields {
+		// BuildField 容器：读 short(字段数) 校验 + 读内部 bf 字段
+		return readBuildFieldContainer(r, f, v)
 	}
 	if isBuildFieldTag(typ) {
 		return readBuildField(r, typ, f, v)
+	}
+	if typ == tagStruct {
+		// 嵌套结构体：递归调用 AutoRead 处理其内部字段
+		// 需要 v 可寻址，以便 AutoRead 能修改内部字段值
+		if !v.CanAddr() {
+			return fmt.Errorf("codec: struct field %s not addressable", f.Name)
+		}
+		return AutoRead(r, v.Addr().Interface())
 	}
 	switch typ {
 	case tagBool:
@@ -512,6 +671,53 @@ func readField(r *GameReader, f reflect.StructField, v reflect.Value) error {
 		v.SetBytes(b)
 	default:
 		return fmt.Errorf("codec: unknown codec tag %q on field %s", typ, f.Name)
+	}
+	return nil
+}
+
+// readBuildFieldContainer 读取 BuildField 容器（字段标记 codec:"buildfields"）。
+// 与 writeBuildFieldContainer 对应：先读 short(字段数) 并校验，再按顺序读内部字段。
+func readBuildFieldContainer(r *GameReader, f reflect.StructField, v reflect.Value) error {
+	// 解引用指针并确保可寻址
+	for v.Kind() == reflect.Pointer {
+		if v.IsNil() {
+			v.Set(reflect.New(v.Type().Elem()))
+		}
+		v = v.Elem()
+	}
+	if v.Kind() != reflect.Struct {
+		return fmt.Errorf("codec: buildfield container %s must be struct, got %s", f.Name, v.Kind())
+	}
+	if !v.CanAddr() {
+		return fmt.Errorf("codec: buildfield container %s not addressable", f.Name)
+	}
+
+	t := v.Type()
+	// 读取并校验字段数量
+	expect := countExportedCodecFields(t)
+	n, err := r.ReadShort()
+	if err != nil {
+		return err
+	}
+	if int(n) != expect {
+		return fmt.Errorf("codec: buildfield container %s count mismatch: expected %d, got %d", f.Name, expect, n)
+	}
+	// 按顺序读内部字段
+	for i := 0; i < t.NumField(); i++ {
+		inner := t.Field(i)
+		if !inner.IsExported() {
+			continue
+		}
+		innerTyp, err := fieldCodecType(inner)
+		if err != nil {
+			return err
+		}
+		if innerTyp == "" {
+			continue
+		}
+		if err := readField(r, inner, v.Field(i)); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -631,41 +837,77 @@ func readBuildField(r *GameReader, tag string, f reflect.StructField, v reflect.
 
 // ---- 对象数组 ----
 
-// listElemType 返回 slice 元素解引用指针后的 struct 类型；
-// 若元素不是 struct 或 *struct 则返回错误。
+// listElemType 获取 slice 元素的实际类型（解引用指针后的 struct 类型）。
+//
+// 【反射知识点 - 类型操作】
+// - f.Type: 获取字段的类型（如 []Member 或 []*Member）
+// - f.Type.Kind(): 获取类型的种类（Slice, Pointer, Struct 等）
+// - f.Type.Elem(): 获取 slice/pointer 的元素类型
+// - elem.Elem(): 解引用指针，获取指向的类型
+//
+// 返回值：
+//   - realElem: 元素的实际 struct 类型
+//   - isPtr: 元素是否为指针类型（[]*Member 时为 true）
 func listElemType(f reflect.StructField) (reflect.Type, bool, error) {
+	// 检查字段是否为 slice 类型
 	if f.Type.Kind() != reflect.Slice {
 		return nil, false, fmt.Errorf("codec: list field %s is not a slice (%s)", f.Name, f.Type)
 	}
-	elem := f.Type.Elem()
+
+	// 获取 slice 的元素类型
+	elem := f.Type.Elem() // []Member → Member, []*Member → *Member
+
+	// 检查元素是否为指针类型
 	isPtr := elem.Kind() == reflect.Pointer
 	realElem := elem
 	if isPtr {
-		realElem = elem.Elem()
+		// 如果是指针，解引用获取实际的 struct 类型
+		realElem = elem.Elem() // *Member → Member
 	}
+
+	// 验证元素是否为 struct 类型
 	if realElem.Kind() != reflect.Struct {
 		return nil, false, fmt.Errorf("codec: list field %s element must be struct or *struct, got %s", f.Name, realElem.Kind())
 	}
 	return realElem, isPtr, nil
 }
 
+// writeList 写入对象数组（slice）。
+//
+// 【反射知识点 - slice 操作】
+// - v.Len(): 获取 slice 的长度
+// - v.Index(i): 获取 slice 的第 i 个元素
+// - elem.Addr(): 获取元素的地址（返回 *Value）
+// - elem.Addr().Interface(): 将 *Value 转为 interface{}
 func writeList(w *GameWriter, f reflect.StructField, v reflect.Value, lenType string) error {
+	// 验证元素类型
 	if _, _, err := listElemType(f); err != nil {
 		return err
 	}
+
+	// 获取 slice 长度
 	n := v.Len()
+
+	// 写入长度前缀
 	if err := writeListLen(w, n, lenType, f.Name); err != nil {
 		return err
 	}
+
+	// 遍历 slice 的每个元素
 	for i := 0; i < n; i++ {
-		elem := v.Index(i)
+		elem := v.Index(i) // 获取第 i 个元素
+
+		// 解引用指针（如果元素是指针类型）
 		for elem.Kind() == reflect.Pointer {
 			if elem.IsNil() {
 				return fmt.Errorf("codec: list field %s element %d is nil pointer", f.Name, i)
 			}
 			elem = elem.Elem()
 		}
-		// 传指针给 AutoWrite，便于内部统一处理（AutoWrite 同时接受 struct / *struct）
+
+		// 递归调用 AutoWrite 写入每个元素
+		// elem.Addr() 获取元素的地址，转为 *Struct 类型
+		// .Interface() 将 reflect.Value 转为 interface{}，以便传入 AutoWrite
 		if err := AutoWrite(w, elem.Addr().Interface()); err != nil {
 			return err
 		}
@@ -673,11 +915,22 @@ func writeList(w *GameWriter, f reflect.StructField, v reflect.Value, lenType st
 	return nil
 }
 
+// readList 读取对象数组（slice）。
+//
+// 【反射知识点 - 创建和设置 slice】
+// - reflect.SliceOf(elemType): 创建 slice 类型
+// - reflect.MakeSlice(type, len, cap): 创建新的 slice
+// - reflect.New(type): 创建新的指针（分配内存）
+// - elem.Set(value): 设置字段值
+// - v.Set(slice): 用新创建的 slice 替换原字段
 func readList(r *GameReader, f reflect.StructField, v reflect.Value, lenType string) error {
+	// 获取元素类型信息
 	realElem, isPtr, err := listElemType(f)
 	if err != nil {
 		return err
 	}
+
+	// 读取 slice 长度
 	n, err := readListLen(r, lenType, f.Name)
 	if err != nil {
 		return err
@@ -686,19 +939,35 @@ func readList(r *GameReader, f reflect.StructField, v reflect.Value, lenType str
 		return fmt.Errorf("codec: list field %s got negative length %d", f.Name, n)
 	}
 
+	// ========== 创建新的 slice ==========
+	// reflect.SliceOf(f.Type.Elem()) 创建 slice 类型
+	// 例如：f.Type.Elem() 是 Member，则创建 []Member 类型
 	sliceType := reflect.SliceOf(f.Type.Elem())
+
+	// reflect.MakeSlice 创建指定长度和容量的 slice
+	// 相当于 make([]Member, n, n)
 	out := reflect.MakeSlice(sliceType, n, n)
+
+	// 遍历并读取每个元素
 	for i := 0; i < n; i++ {
-		elem := out.Index(i)
+		elem := out.Index(i) // 获取第 i 个元素
+
 		if isPtr {
-			elem.Set(reflect.New(realElem)) // 分配 *Struct
-			elem = elem.Elem()              // 切到内部 struct
+			// 如果元素是指针类型，需要分配内存
+			// reflect.New(realElem) 创建一个 *Member 指针
+			elem.Set(reflect.New(realElem))
+			// 然后切到内部的 struct
+			elem = elem.Elem()
 		}
-		// elem 此时为 addressable 的 struct；传指针给 AutoRead
+
+		// 递归调用 AutoRead 读取每个元素
+		// elem.Addr() 获取元素的地址（必须是可寻址的）
 		if err := AutoRead(r, elem.Addr().Interface()); err != nil {
 			return err
 		}
 	}
+
+	// 用新创建的 slice 替换原字段
 	v.Set(out)
 	return nil
 }
@@ -780,6 +1049,9 @@ func defaultCodecType(t reflect.Type) string {
 		return tagDouble
 	case reflect.String:
 		return tagString
+	case reflect.Struct:
+		// 嵌套结构体：递归调用 AutoWrite/AutoRead 处理其内部字段
+		return tagStruct
 	case reflect.Slice:
 		// []byte / []uint8 → bytes
 		if t.Elem().Kind() == reflect.Uint8 {
